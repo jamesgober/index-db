@@ -1,0 +1,19 @@
+# Development (dev/ is committed; .dev/ and .claude/ stay local)
+/.dev
+/.claude
+
+# Rust / Cargo
+/target/
+**/*.rs.bk
+
+# Editor & OS junk
+/.vscode
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Secrets
+.env
+
+# Libraries do not commit the lockfile
+Cargo.lock

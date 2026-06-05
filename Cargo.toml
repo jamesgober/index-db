@@ -1,0 +1,100 @@
+# ██████╗ ███████╗██████╗ ███████╗
+# ██╔══██╗██╔════╝██╔══██╗██╔════╝
+# ██████╔╝█████╗  ██████╔╝███████╗
+# ██╔══██╗██╔══╝  ██╔═══╝ ╚════██║
+# ██║  ██║███████╗██║     ███████║
+# ╚═╝  ╚═╝╚══════╝╚═╝     ╚══════╝
+#╔═══════════════════════════════╗
+#║ Rust Efficiency & Performance ║
+#╚═══════════════════════════════╝
+[package]
+name    = "index-db"
+version = "0.1.0"
+
+# Minimum Supported Rust Version (MSRV)
+rust-version = "1.85"
+edition = "2024"
+
+# License
+license = "Apache-2.0 OR MIT"
+
+# Readme
+readme = "README.md"
+
+# Description
+description = "B+tree indexing primitive for Rust storage engines - ordered keys, range scans, and concurrent access over paged storage."
+
+# Keywords (5 max)
+keywords = [
+    "btree",
+    "b-plus-tree",
+    "index",
+    "range-scan",
+    "storage-engine"
+]
+
+# Categories
+categories = [
+    "data-structures",
+    "database-implementations"
+]
+
+# Links
+homepage      = "https://github.com/jamesgober/index-db"
+repository    = "https://github.com/jamesgober/index-db"
+documentation = "https://docs.rs/index-db"
+
+# Authors
+authors = [
+    "James Gober <me@jamesgober.com>"
+]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "index_db"
+path = "src/lib.rs"
+
+
+# FEATURE FLAGS
+# #################################
+[features]
+default = ["std"]
+std = []
+# Serialization for public types.
+serde = ["dep:serde"]
+
+
+# DEPENDENCIES
+# #################################
+[dependencies]
+serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
+
+
+# DEV DEPENDENCIES
+# #################################
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest  = "1"
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+
+# BENCHMARKS
+# #################################
+[[bench]]
+name    = "index_bench"
+harness = false
+
+
+# RELEASE PROFILE
+# #################################
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = "symbols"

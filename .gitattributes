@@ -1,0 +1,13 @@
+# Normalize line endings to LF in the repository and on checkout for every
+# platform. Without this, the GitHub Windows runner (git `autocrlf=true`)
+# checks source out with CRLF, and `cargo fmt --all -- --check` fails because
+# `rustfmt.toml` pins `newline_style = "Unix"`.
+* text=auto eol=lf
+
+# Keep development-only paths out of `git archive` source tarballs.
+/.dev             export-ignore
+/.github          export-ignore
+/docs             export-ignore
+/tests            export-ignore
+/.gitignore       export-ignore
+/.editorconfig    export-ignore
