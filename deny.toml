@@ -1,4 +1,4 @@
-# cargo-deny configuration for wal-db.
+# cargo-deny configuration for index-db.
 # Schema reference: https://embarkstudios.github.io/cargo-deny/checks/cfg.html
 
 [graph]
