@@ -6,10 +6,11 @@
 //!
 //! The one public type is [`BPlusTree`], an ordered map. Keys are kept sorted
 //! across the tree, so a lookup is a binary search at each level and the height
-//! grows only with the logarithm of the entry count. The node layout — sorted
-//! keys packed into fixed-capacity arrays, internal nodes routing to children —
-//! is the same structure a storage engine persists as an on-disk index; this
-//! release keeps the tree in memory.
+//! grows only with the logarithm of the entry count. Beyond point operations it
+//! supports ordered iteration and range scans, forward and in reverse. The node
+//! layout — sorted keys packed into fixed-capacity arrays, internal nodes routing
+//! to children — is the same structure a storage engine persists as an on-disk
+//! index; this release keeps the tree in memory.
 //!
 //! ## Example
 //!
@@ -21,17 +22,21 @@
 //! index.insert(7, "lucky");
 //!
 //! assert_eq!(index.get(&42), Some(&"answer"));
-//! assert_eq!(index.get(&7), Some(&"lucky"));
 //! assert_eq!(index.get(&13), None);
-//! assert_eq!(index.len(), 2);
+//!
+//! // Ordered range scan.
+//! let keys: Vec<_> = index.range(0..50).map(|(&k, _)| k).collect();
+//! assert_eq!(keys, vec![7, 42]);
+//!
+//! assert_eq!(index.remove(&7), Some("lucky"));
+//! assert_eq!(index.len(), 1);
 //! ```
 //!
 //! ## Scope
 //!
-//! This is the `v0.2.0` release: the B+tree core — search, insert, and node
-//! splitting. Deletion, merge/redistribute, and forward and reverse range scans
-//! land in `v0.3.0`; latch-coupled concurrent access in `v0.4.0`. See
-//! `dev/ROADMAP.md`.
+//! As of `v0.3.0` the ordered-map surface is complete: search, insert, delete
+//! (with merge and redistribute), and forward and reverse range scans.
+//! Latch-coupled concurrent access lands in `v0.4.0`. See `dev/ROADMAP.md`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -49,7 +54,9 @@
 
 extern crate alloc;
 
+mod iter;
 mod node;
 mod tree;
 
+pub use crate::iter::Iter;
 pub use crate::tree::BPlusTree;

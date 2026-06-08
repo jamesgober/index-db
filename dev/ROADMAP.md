@@ -28,10 +28,15 @@ Exit criteria:
 
 ---
 
-## v0.3.0 -- delete + merge/redistribute + forward & reverse range scans
+## v0.3.0 -- delete + merge/redistribute + forward & reverse range scans (DONE)
+
+`remove` with sibling borrow / merge and root collapse; `iter`/`range` as a
+double-ended iterator (`Iter`) over `(&K, &V)`, plus `IntoIterator for &tree`.
+Routing-separator + minimum-occupancy invariants property-tested after every
+delete; iteration/range cross-checked vs `BTreeMap` forward and reverse.
 
 Exit criteria:
-- [ ] New surface tested; hot paths benchmarked.
+- [x] New surface tested; hot paths benchmarked (range scan + bulk remove).
 
 ---
 

@@ -1,9 +1,9 @@
 # index-db &mdash; API Reference
 
 > Complete reference for every public item in `index-db`, with examples.
-> **Status: pre-1.0.** This documents the surface shipped in `v0.2.0`; the
-> remaining sections of the roadmap (deletion, range scans, concurrency) extend
-> it across the 0.x series. See [`dev/ROADMAP.md`](../dev/ROADMAP.md).
+> **Status: pre-1.0.** This documents the surface shipped in `v0.3.0`; the
+> remaining roadmap work (concurrent access) extends it across the 0.x series.
+> See [`dev/ROADMAP.md`](../dev/ROADMAP.md).
 
 ## Table of Contents
 
@@ -14,11 +14,16 @@
   - [`BPlusTree::insert`](#bplustreeinsert)
   - [`BPlusTree::get`](#bplustreeget)
   - [`BPlusTree::contains_key`](#bplustreecontains_key)
+  - [`BPlusTree::remove`](#bplustreeremove)
+  - [`BPlusTree::iter`](#bplustreeiter)
+  - [`BPlusTree::range`](#bplustreerange)
   - [`BPlusTree::len`](#bplustreelen)
   - [`BPlusTree::is_empty`](#bplustreeis_empty)
   - [`BPlusTree::height`](#bplustreeheight)
   - [`BPlusTree::clear`](#bplustreeclear)
   - [`Default`](#default)
+  - [`IntoIterator`](#intoiterator)
+- [`Iter`](#iter)
 - [Type parameters and bounds](#type-parameters-and-bounds)
 - [Complexity](#complexity)
 - [Feature flags](#feature-flags)
@@ -38,9 +43,9 @@ routing to their children — is the structure a storage engine persists as an
 on-disk index. This release keeps the tree in memory; the layout is the durable
 one a pager will later back.
 
-`v0.2.0` covers the B+tree core: search, insert, and node splitting. Deletion,
-forward and reverse range scans, and latch-coupled concurrent access arrive in
-later 0.x releases.
+As of `v0.3.0` the ordered-map surface is complete: search, insert, delete (with
+merge and redistribute), ordered iteration, and forward and reverse range scans.
+Latch-coupled concurrent access arrives in a later 0.x release.
 
 ---
 
@@ -48,7 +53,7 @@ later 0.x releases.
 
 ```toml
 [dependencies]
-index-db = "0.2"
+index-db = "0.3"
 ```
 
 The crate is `no_std`-compatible. It uses `alloc` internally, so the only thing
@@ -252,6 +257,169 @@ assert!(!index.contains_key(&7));
 
 ---
 
+### `BPlusTree::remove`
+
+```rust
+pub fn remove(&mut self, key: &K) -> Option<V>
+```
+
+Remove `key`, returning its value.
+
+**Parameters:**
+
+- `key` — a reference to the key to remove.
+
+**Returns:** `Some(value)` if the key was present (the removed value), or `None`
+if the tree held no such key.
+
+Removing keeps the tree balanced. A node left below half full borrows an entry
+from a sibling or merges with one, and when the root drops to a single child the
+tree collapses a level. Every leaf stays at the same depth, so lookups, scans,
+and further deletes remain logarithmic.
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+index.insert(1_u32, "a");
+index.insert(2, "b");
+
+assert_eq!(index.remove(&1), Some("a")); // returns the removed value
+assert_eq!(index.remove(&1), None);       // already gone
+assert_eq!(index.len(), 1);
+```
+
+Deleting every key returns the tree to a single empty leaf, ready for reuse:
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+for k in 0..1_000_u32 {
+    index.insert(k, k);
+}
+for k in 0..1_000_u32 {
+    assert_eq!(index.remove(&k), Some(k));
+}
+assert!(index.is_empty());
+assert_eq!(index.height(), 1);
+```
+
+---
+
+### `BPlusTree::iter`
+
+```rust
+pub fn iter(&self) -> Iter<'_, K, V>
+```
+
+Iterate over every entry in ascending key order.
+
+No parameters.
+
+**Returns:** an [`Iter`](#iter) yielding `(&K, &V)`. It is a
+[`DoubleEndedIterator`], so `.rev()` walks the entries in descending order and
+the iterator can be driven from both ends at once.
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+index.insert(2_u32, "b");
+index.insert(1, "a");
+index.insert(3, "c");
+
+let entries: Vec<_> = index.iter().map(|(&k, &v)| (k, v)).collect();
+assert_eq!(entries, vec![(1, "a"), (2, "b"), (3, "c")]);
+```
+
+Descending order with `.rev()`:
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+for k in 0..5_u32 {
+    index.insert(k, k);
+}
+let keys: Vec<_> = index.iter().rev().map(|(&k, _)| k).collect();
+assert_eq!(keys, vec![4, 3, 2, 1, 0]);
+```
+
+`&tree` is also iterable directly (see [`IntoIterator`](#intoiterator)):
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+index.insert(1_u32, 10);
+index.insert(2, 20);
+
+let mut total = 0;
+for (_, &v) in &index {
+    total += v;
+}
+assert_eq!(total, 30);
+```
+
+---
+
+### `BPlusTree::range`
+
+```rust
+pub fn range<R: RangeBounds<K>>(&self, range: R) -> Iter<'_, K, V>
+```
+
+Iterate over the entries whose keys fall in `range`, in ascending key order.
+
+**Parameters:**
+
+- `range` — any standard range expression over the key order: `a..b`, `a..=b`,
+  `..b`, `a..`, or `..`.
+
+**Returns:** an [`Iter`](#iter) over the matching entries. Like
+[`iter`](#bplustreeiter) it is double-ended, so a range can be scanned forward or
+in reverse.
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+for k in 0..10_u32 {
+    index.insert(k, k);
+}
+
+// Half-open range.
+let a: Vec<_> = index.range(3..7).map(|(&k, _)| k).collect();
+assert_eq!(a, vec![3, 4, 5, 6]);
+
+// Inclusive range.
+let b: Vec<_> = index.range(3..=7).map(|(&k, _)| k).collect();
+assert_eq!(b, vec![3, 4, 5, 6, 7]);
+
+// Open-ended.
+let c: Vec<_> = index.range(8..).map(|(&k, _)| k).collect();
+assert_eq!(c, vec![8, 9]);
+```
+
+A range scanned in reverse, and an empty range:
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+for k in 0..10_u32 {
+    index.insert(k, k);
+}
+let rev: Vec<_> = index.range(2..=5).rev().map(|(&k, _)| k).collect();
+assert_eq!(rev, vec![5, 4, 3, 2]);
+
+let empty: Vec<_> = index.range(100..200).map(|(&k, _)| k).collect();
+assert!(empty.is_empty());
+```
+
+---
+
 ### `BPlusTree::len`
 
 ```rust
@@ -382,18 +550,77 @@ assert!(index.is_empty());
 
 ---
 
+### `IntoIterator`
+
+```rust
+impl<'a, K, V> IntoIterator for &'a BPlusTree<K, V>
+```
+
+A shared reference to a tree iterates over its entries, so `for (k, v) in &tree`
+works and the tree is reusable afterward. Equivalent to
+[`iter`](#bplustreeiter); the item type is `(&K, &V)` and the iterator is
+[`Iter`](#iter).
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+index.insert(1_u32, "a");
+index.insert(2, "b");
+
+let collected: Vec<_> = (&index).into_iter().map(|(&k, _)| k).collect();
+assert_eq!(collected, vec![1, 2]);
+```
+
+---
+
+## `Iter`
+
+```rust
+pub struct Iter<'a, K, V> { /* private */ }
+```
+
+The iterator returned by [`BPlusTree::iter`](#bplustreeiter) and
+[`BPlusTree::range`](#bplustreerange). It yields `(&'a K, &'a V)` in ascending key
+order and implements both `Iterator` and `DoubleEndedIterator`, so it composes
+with the standard iterator adapters (`map`, `filter`, `take`, `rev`, ...) and can
+be consumed from either end.
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+for k in 0..6_u32 {
+    index.insert(k, k);
+}
+
+// Standard adapters apply.
+let evens: Vec<_> = index.iter().filter(|(&k, _)| k % 2 == 0).map(|(&k, _)| k).collect();
+assert_eq!(evens, vec![0, 2, 4]);
+
+// Front and back at once.
+let mut it = index.range(1..5);
+assert_eq!(it.next().map(|(&k, _)| k), Some(1));
+assert_eq!(it.next_back().map(|(&k, _)| k), Some(4));
+```
+
+---
+
 ## Type parameters and bounds
 
 `BPlusTree<K, V>` is generic over the key type `K` and value type `V`.
 
-- [`get`](#bplustreeget), [`contains_key`](#bplustreecontains_key) require
-  `K: Ord` — lookups need a total order to navigate the tree.
-- [`insert`](#bplustreeinsert) additionally requires `K: Clone`. A B+tree copies
-  a separator key up into the parent when a leaf splits, so the key type must be
-  cloneable. Keys such as integers and short strings clone cheaply.
+- [`get`](#bplustreeget), [`contains_key`](#bplustreecontains_key), and
+  [`range`](#bplustreerange) require `K: Ord` — navigating and bounding the tree
+  needs a total order.
+- [`insert`](#bplustreeinsert) and [`remove`](#bplustreeremove) additionally
+  require `K: Clone`. A B+tree copies a separator key up into the parent when a
+  leaf splits, and rewrites separators when nodes borrow on delete, so the key
+  type must be cloneable. Keys such as integers and short strings clone cheaply.
 - The structural methods ([`new`](#bplustreenew), [`len`](#bplustreelen),
   [`is_empty`](#bplustreeis_empty), [`height`](#bplustreeheight),
-  [`clear`](#bplustreeclear), `Default`) place no bound on `K` or `V`.
+  [`clear`](#bplustreeclear), [`iter`](#bplustreeiter), `Default`) place no bound
+  on `K` or `V`.
 
 Values (`V`) are never required to be `Ord`, `Clone`, or anything else.
 
@@ -407,12 +634,15 @@ For a tree of `n` entries with node fan-out `b`:
 |-----------|------|-------------|
 | `get` / `contains_key` | `O(log n)` | none |
 | `insert` | `O(log n)` | amortized; only on a node split |
-| `len` / `is_empty` / `height` | `O(1)` / `O(log n)` | none |
+| `remove` | `O(log n)` | none |
+| `iter` / `range` | `O(log n)` to start, then `O(1)` per entry | one path stack per cursor |
+| `len` / `is_empty` / `height` | `O(1)` / `O(1)` / `O(log n)` | none |
 | `clear` | `O(n)` (drops entries) | none |
 
 A lookup performs one binary search per level — at most `log_b(n)` levels, each a
 search over up to `b - 1` keys. Lookups touch only keys, never values, and
-allocate nothing.
+allocate nothing. A range scan seeks to its start in `O(log n)` and then yields
+each entry in amortized `O(1)`.
 
 ---
 

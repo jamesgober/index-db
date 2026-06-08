@@ -77,6 +77,16 @@ impl<K, V> Node<K, V> {
             vals: Vec::new(),
         })
     }
+
+    /// The number of keys held in this node. For a leaf this is the entry count;
+    /// for an internal node it is the separator count (one fewer than children).
+    #[inline]
+    pub(crate) fn keys_len(&self) -> usize {
+        match self {
+            Node::Leaf(leaf) => leaf.keys.len(),
+            Node::Internal(internal) => internal.keys.len(),
+        }
+    }
 }
 
 impl<K: Ord, V> Node<K, V> {
@@ -105,6 +115,18 @@ impl<K: Ord + Clone, V> Node<K, V> {
             Node::Internal(internal) => internal.insert(key, value, order),
         }
     }
+
+    /// Remove `key` from this subtree, returning its value if it was present.
+    ///
+    /// A node that drops below `min_keys` after the removal is left under-full;
+    /// its parent restores the minimum by borrowing from or merging with a
+    /// sibling. The root is exempt and may shrink freely.
+    pub(crate) fn remove(&mut self, key: &K, min_keys: usize) -> Option<V> {
+        match self {
+            Node::Leaf(leaf) => leaf.remove(key),
+            Node::Internal(internal) => internal.remove(key, min_keys),
+        }
+    }
 }
 
 impl<K: Ord, V> Leaf<K, V> {
@@ -113,6 +135,17 @@ impl<K: Ord, V> Leaf<K, V> {
     fn get(&self, key: &K) -> Option<&V> {
         match self.keys.binary_search(key) {
             Ok(i) => Some(&self.vals[i]),
+            Err(_) => None,
+        }
+    }
+
+    /// Remove `key`'s entry from this leaf, returning its value if present.
+    fn remove(&mut self, key: &K) -> Option<V> {
+        match self.keys.binary_search(key) {
+            Ok(i) => {
+                let _removed_key = self.keys.remove(i);
+                Some(self.vals.remove(i))
+            }
             Err(_) => None,
         }
     }
@@ -163,7 +196,7 @@ impl<K: Ord, V> Internal<K, V> {
     /// A key equal to `keys[i]` belongs to the right child of that separator
     /// (`i + 1`), since separators mark the lower bound of the right subtree.
     #[inline]
-    fn child_index(&self, key: &K) -> usize {
+    pub(crate) fn child_index(&self, key: &K) -> usize {
         match self.keys.binary_search(key) {
             Ok(i) => i + 1,
             Err(i) => i,
@@ -204,5 +237,119 @@ impl<K: Ord + Clone, V> Internal<K, V> {
             children: right_children,
         });
         Insert::Split { sep, right }
+    }
+
+    /// Route the removal to the owning child, then restore that child's minimum
+    /// occupancy if the deletion left it under-full.
+    fn remove(&mut self, key: &K, min_keys: usize) -> Option<V> {
+        let idx = self.child_index(key);
+        let removed = self.children[idx].remove(key, min_keys);
+        if removed.is_some() && self.children[idx].keys_len() < min_keys {
+            self.rebalance(idx, min_keys);
+        }
+        removed
+    }
+
+    /// Restore the minimum occupancy of the under-full child at `idx`. Borrow a
+    /// single entry from a sibling that has one to spare; otherwise merge the
+    /// child into a sibling, which removes one separator from this node and may
+    /// in turn leave *this* node under-full for its own parent to fix.
+    fn rebalance(&mut self, idx: usize, min_keys: usize) {
+        if idx > 0 && self.children[idx - 1].keys_len() > min_keys {
+            self.borrow_from_left(idx);
+        } else if idx + 1 < self.children.len() && self.children[idx + 1].keys_len() > min_keys {
+            self.borrow_from_right(idx);
+        } else if idx > 0 {
+            self.merge(idx - 1);
+        } else {
+            self.merge(idx);
+        }
+    }
+
+    /// Move one entry from the left sibling (`idx - 1`) into the front of the
+    /// child at `idx`, and update the separator between them.
+    fn borrow_from_left(&mut self, idx: usize) {
+        let sep = self.keys[idx - 1].clone();
+        let (left_part, right_part) = self.children.split_at_mut(idx);
+        let new_sep = match (&mut left_part[idx - 1], &mut right_part[0]) {
+            (Node::Leaf(left), Node::Leaf(child)) => match (left.keys.pop(), left.vals.pop()) {
+                (Some(k), Some(v)) => {
+                    child.keys.insert(0, k.clone());
+                    child.vals.insert(0, v);
+                    Some(k)
+                }
+                _ => None,
+            },
+            (Node::Internal(left), Node::Internal(child)) => {
+                child.keys.insert(0, sep);
+                if let Some(moved) = left.children.pop() {
+                    child.children.insert(0, moved);
+                }
+                left.keys.pop()
+            }
+            // Siblings in a balanced tree are always the same kind.
+            _ => None,
+        };
+        if let Some(ns) = new_sep {
+            self.keys[idx - 1] = ns;
+        }
+    }
+
+    /// Move one entry from the right sibling (`idx + 1`) into the back of the
+    /// child at `idx`, and update the separator between them.
+    fn borrow_from_right(&mut self, idx: usize) {
+        let sep = self.keys[idx].clone();
+        let (left_part, right_part) = self.children.split_at_mut(idx + 1);
+        let new_sep = match (&mut left_part[idx], &mut right_part[0]) {
+            (Node::Leaf(child), Node::Leaf(right)) => {
+                if right.keys.is_empty() {
+                    None
+                } else {
+                    let k = right.keys.remove(0);
+                    let v = right.vals.remove(0);
+                    child.keys.push(k);
+                    child.vals.push(v);
+                    right.keys.first().cloned()
+                }
+            }
+            (Node::Internal(child), Node::Internal(right)) => {
+                child.keys.push(sep);
+                if !right.children.is_empty() {
+                    let moved = right.children.remove(0);
+                    child.children.push(moved);
+                }
+                if right.keys.is_empty() {
+                    None
+                } else {
+                    Some(right.keys.remove(0))
+                }
+            }
+            // Siblings in a balanced tree are always the same kind.
+            _ => None,
+        };
+        if let Some(ns) = new_sep {
+            self.keys[idx] = ns;
+        }
+    }
+
+    /// Merge the child at `i + 1` into the child at `i`, consuming the separator
+    /// between them. The merged node holds both children's contents; this node
+    /// loses one separator and one child.
+    fn merge(&mut self, i: usize) {
+        let right = self.children.remove(i + 1);
+        let sep = self.keys.remove(i);
+        match (&mut self.children[i], right) {
+            (Node::Leaf(left), Node::Leaf(mut right)) => {
+                left.keys.append(&mut right.keys);
+                left.vals.append(&mut right.vals);
+            }
+            (Node::Internal(left), Node::Internal(mut right)) => {
+                left.keys.push(sep);
+                left.keys.append(&mut right.keys);
+                left.children.append(&mut right.children);
+            }
+            // Siblings in a balanced tree are always the same kind.
+            _ => {}
+        }
     }
 }

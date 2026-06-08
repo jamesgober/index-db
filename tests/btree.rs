@@ -79,6 +79,53 @@ fn string_keys_order_correctly() {
     assert_eq!(tree.len(), words.len());
 }
 
+#[test]
+fn remove_returns_value_and_shrinks() {
+    let mut tree = BPlusTree::new();
+    for k in 0..1_000_u32 {
+        let _previous = tree.insert(k, k * 2);
+    }
+    for k in 0..1_000_u32 {
+        assert_eq!(tree.remove(&k), Some(k * 2));
+    }
+    assert!(tree.is_empty());
+    assert_eq!(tree.remove(&0), None);
+    assert_eq!(tree.height(), 1);
+}
+
+#[test]
+fn iterate_in_order() {
+    let mut tree = BPlusTree::new();
+    for k in [40_u32, 10, 30, 20, 50] {
+        let _previous = tree.insert(k, k);
+    }
+    let keys: Vec<_> = tree.iter().map(|(&k, _)| k).collect();
+    assert_eq!(keys, vec![10, 20, 30, 40, 50]);
+
+    // `&tree` works as an IntoIterator.
+    let via_into: Vec<_> = (&tree).into_iter().map(|(&k, _)| k).collect();
+    assert_eq!(via_into, keys);
+
+    let reversed: Vec<_> = tree.iter().rev().map(|(&k, _)| k).collect();
+    assert_eq!(reversed, vec![50, 40, 30, 20, 10]);
+}
+
+#[test]
+fn range_scan_matches_expected() {
+    let mut tree = BPlusTree::new();
+    for k in 0..100_u32 {
+        let _previous = tree.insert(k, k);
+    }
+    let window: Vec<_> = tree.range(20..30).map(|(&k, _)| k).collect();
+    assert_eq!(window, (20..30).collect::<Vec<_>>());
+
+    let inclusive: Vec<_> = tree.range(95..=99).map(|(&k, _)| k).collect();
+    assert_eq!(inclusive, vec![95, 96, 97, 98, 99]);
+
+    let empty: Vec<_> = tree.range(200..300).map(|(&k, _)| k).collect();
+    assert!(empty.is_empty());
+}
+
 proptest! {
     /// Against an arbitrary mix of inserts, the tree answers every lookup
     /// exactly as `BTreeMap` does, and reports the same length.
@@ -96,5 +143,27 @@ proptest! {
             prop_assert_eq!(tree.get(&k), reference.get(&k));
             prop_assert_eq!(tree.contains_key(&k), reference.contains_key(&k));
         }
+    }
+
+    /// A full insert / remove / scan workload tracks `BTreeMap` end to end.
+    #[test]
+    fn full_workload_matches_btreemap(
+        inserts in prop::collection::vec(0_u64..300, 0..400),
+        removes in prop::collection::vec(0_u64..300, 0..200),
+    ) {
+        let mut tree = BPlusTree::new();
+        let mut reference = BTreeMap::new();
+
+        for k in inserts {
+            prop_assert_eq!(tree.insert(k, k), reference.insert(k, k));
+        }
+        for k in removes {
+            prop_assert_eq!(tree.remove(&k), reference.remove(&k));
+        }
+
+        prop_assert_eq!(tree.len(), reference.len());
+        let tree_entries: Vec<_> = tree.iter().map(|(&k, &v)| (k, v)).collect();
+        let ref_entries: Vec<_> = reference.iter().map(|(&k, &v)| (k, v)).collect();
+        prop_assert_eq!(tree_entries, ref_entries);
     }
 }

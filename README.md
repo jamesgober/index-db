@@ -29,7 +29,7 @@
         <strong>MSRV is 1.85+</strong> (Rust 2024 edition). Ordered B+tree. Range scans. Latch-coupled concurrent access.
     </p>
     <blockquote>
-        <strong>Status: pre-1.0, in active development.</strong> <code>v0.2.0</code> ships the B+tree core &mdash; ordered storage, point lookups, and automatic node splitting. Deletion, range scans, and latch-coupled concurrency land across the rest of the 0.x series per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The public API is frozen at <code>1.0.0</code>.
+        <strong>Status: pre-1.0, in active development.</strong> <code>v0.3.0</code> completes the ordered-map surface &mdash; ordered storage, point lookups, deletion, and forward and reverse range scans. Latch-coupled concurrency lands next per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The public API is frozen at <code>1.0.0</code>.
     </blockquote>
 </div>
 
@@ -38,17 +38,16 @@
 
 <h2>What it does</h2>
 
-**Available now (`v0.2.0`):**
+**Available now (`v0.3.0`):**
 
-- **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup and insert
-- **Automatic node splitting** &mdash; nodes split and the tree grows taller on its own, staying balanced at every depth
+- **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup, insert, and delete
+- **Self-balancing** &mdash; nodes split on insert and borrow or merge on delete, so the tree stays balanced at every depth on its own
+- **Range scans** &mdash; forward and reverse iteration over a key range, the operation B+trees exist for
 - **Paged node layout** &mdash; sorted keys packed into fixed-capacity nodes, the structure a pager persists as an on-disk index
 - **`no_std` support** &mdash; depends only on `alloc`; the `std` feature is optional
 
 **On the roadmap** (see [`dev/ROADMAP.md`](./dev/ROADMAP.md)):
 
-- **Range scans** &mdash; forward and reverse iteration over a key range
-- **Deletion** &mdash; remove with merge and redistribute to keep nodes full
 - **Concurrent access** &mdash; latch coupling (crabbing) for many-reader / many-writer traversal without a global lock
 - **Bulk load** &mdash; build a balanced tree bottom-up from sorted input
 
@@ -60,7 +59,7 @@
 
 ```toml
 [dependencies]
-index-db = "0.2"
+index-db = "0.3"
 ```
 
 <br>
@@ -84,7 +83,13 @@ assert_eq!(index.get(&9), None);
 // Re-inserting a key replaces and returns the old value.
 assert_eq!(index.insert(1, "ONE"), Some("one"));
 
-assert_eq!(index.len(), 3);
+// Scan a key range in order (and in reverse).
+let keys: Vec<_> = index.range(1..3).map(|(&k, _)| k).collect();
+assert_eq!(keys, vec![1, 2]);
+
+// Remove returns the value that was there.
+assert_eq!(index.remove(&2), Some("two"));
+assert_eq!(index.len(), 2);
 ```
 
 <br>
@@ -98,6 +103,8 @@ For the complete reference with examples for every method, see [`docs/API.md`](.
 | [`BPlusTree::new`](./docs/API.md#bplustreenew) | Create an empty tree |
 | [`insert`](./docs/API.md#bplustreeinsert) | Insert or replace a key's value |
 | [`get`](./docs/API.md#bplustreeget) / [`contains_key`](./docs/API.md#bplustreecontains_key) | Point lookup / membership test |
+| [`remove`](./docs/API.md#bplustreeremove) | Delete a key, returning its value |
+| [`iter`](./docs/API.md#bplustreeiter) / [`range`](./docs/API.md#bplustreerange) | Ordered iteration / range scan, forward or reverse |
 | [`len`](./docs/API.md#bplustreelen) / [`is_empty`](./docs/API.md#bplustreeis_empty) / [`height`](./docs/API.md#bplustreeheight) | Size and shape |
 | [`clear`](./docs/API.md#bplustreeclear) | Remove every entry |
 
