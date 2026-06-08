@@ -29,7 +29,7 @@
         <strong>MSRV is 1.85+</strong> (Rust 2024 edition). Ordered B+tree. Range scans. Latch-coupled concurrent access.
     </p>
     <blockquote>
-        <strong>Status: pre-1.0, in active development.</strong> This is the <code>v0.1.0</code> scaffold &mdash; structure, tooling, and CI gates are in place; the implementation lands across the 0.x series per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The public API is frozen at <code>1.0.0</code>.
+        <strong>Status: pre-1.0, in active development.</strong> <code>v0.2.0</code> ships the B+tree core &mdash; ordered storage, point lookups, and automatic node splitting. Deletion, range scans, and latch-coupled concurrency land across the rest of the 0.x series per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The public API is frozen at <code>1.0.0</code>.
     </blockquote>
 </div>
 
@@ -38,12 +38,19 @@
 
 <h2>What it does</h2>
 
-- **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup, insert, and delete
-- **Range scans** &mdash; forward and reverse iteration over a key range, the operation B+trees exist for
-- **Paged layout** &mdash; internal and leaf nodes are fixed-size pages, persistable and cacheable via a pager
+**Available now (`v0.2.0`):**
+
+- **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup and insert
+- **Automatic node splitting** &mdash; nodes split and the tree grows taller on its own, staying balanced at every depth
+- **Paged node layout** &mdash; sorted keys packed into fixed-capacity nodes, the structure a pager persists as an on-disk index
+- **`no_std` support** &mdash; depends only on `alloc`; the `std` feature is optional
+
+**On the roadmap** (see [`dev/ROADMAP.md`](./dev/ROADMAP.md)):
+
+- **Range scans** &mdash; forward and reverse iteration over a key range
+- **Deletion** &mdash; remove with merge and redistribute to keep nodes full
 - **Concurrent access** &mdash; latch coupling (crabbing) for many-reader / many-writer traversal without a global lock
 - **Bulk load** &mdash; build a balanced tree bottom-up from sorted input
-- **Pluggable key ordering** &mdash; byte-ordered by default; custom comparators supported
 
 <br>
 <hr>
@@ -53,19 +60,46 @@
 
 ```toml
 [dependencies]
-index-db = "0.1"
+index-db = "0.2"
+```
+
+<br>
+
+## Quick Start
+
+```rust
+use index_db::BPlusTree;
+
+let mut index = BPlusTree::new();
+
+// Insert key/value pairs in any order; the tree keeps them sorted.
+index.insert(3_u32, "three");
+index.insert(1, "one");
+index.insert(2, "two");
+
+// Point lookups return a reference to the value, or None.
+assert_eq!(index.get(&2), Some(&"two"));
+assert_eq!(index.get(&9), None);
+
+// Re-inserting a key replaces and returns the old value.
+assert_eq!(index.insert(1, "ONE"), Some("one"));
+
+assert_eq!(index.len(), 3);
 ```
 
 <br>
 
 ## API Overview
 
-For the complete reference, see [`docs/API.md`](./docs/API.md).
+For the complete reference with examples for every method, see [`docs/API.md`](./docs/API.md).
 
-- [`Ordered B+tree`](./docs/API.md)
-- [`Range scans`](./docs/API.md)
-- [`Paged layout`](./docs/API.md)
-- [`Concurrent access`](./docs/API.md)
+| Method | Purpose |
+|--------|---------|
+| [`BPlusTree::new`](./docs/API.md#bplustreenew) | Create an empty tree |
+| [`insert`](./docs/API.md#bplustreeinsert) | Insert or replace a key's value |
+| [`get`](./docs/API.md#bplustreeget) / [`contains_key`](./docs/API.md#bplustreecontains_key) | Point lookup / membership test |
+| [`len`](./docs/API.md#bplustreelen) / [`is_empty`](./docs/API.md#bplustreeis_empty) / [`height`](./docs/API.md#bplustreeheight) | Size and shape |
+| [`clear`](./docs/API.md#bplustreeclear) | Remove every entry |
 
 <br>
 <hr>

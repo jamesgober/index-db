@@ -9,7 +9,7 @@
 #╚═══════════════════════════════╝
 [package]
 name    = "index-db"
-version = "0.1.0"
+version = "0.2.0"
 
 # Minimum Supported Rust Version (MSRV)
 rust-version = "1.85"

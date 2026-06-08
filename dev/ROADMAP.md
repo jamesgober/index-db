@@ -15,11 +15,16 @@ Compiles, CI green, structure correct, no domain logic.
 
 ---
 
-## v0.2.0 -- B+tree core over pages: search / insert / node split (THE HARD PART, NOT DEFERRED)
+## v0.2.0 -- B+tree core over pages: search / insert / node split (THE HARD PART, NOT DEFERRED) (DONE)
+
+`BPlusTree<K, V>` with `new`/`insert`/`get`/`contains_key`/`len`/`is_empty`/`height`/`clear`.
+Automatic leaf + internal split with median promotion; balanced at every depth.
+Heap-backed nodes for now (page-db is unpublished and carries no path dep); the
+node layout is the page-oriented one a pager will persist later.
 
 Exit criteria:
-- [ ] Every public item has rustdoc + a runnable example.
-- [ ] Core invariants property-tested.
+- [x] Every public item has rustdoc + a runnable example.
+- [x] Core invariants property-tested (balance, sorted keys, separators; cross-checked vs `BTreeMap`).
 
 ---
 
