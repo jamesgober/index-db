@@ -1,9 +1,9 @@
 # index-db &mdash; API Reference
 
 > Complete reference for every public item in `index-db`, with examples.
-> **Status: pre-1.0.** This documents the surface shipped in `v0.3.0`; the
-> remaining roadmap work (concurrent access) extends it across the 0.x series.
-> See [`dev/ROADMAP.md`](../dev/ROADMAP.md).
+> **Status: pre-1.0.** This documents the surface shipped in `v0.4.0`, which
+> feature-freezes the in-memory ordered map. A page-backed, concurrent backend is
+> the planned next step. See [`dev/ROADMAP.md`](../dev/ROADMAP.md).
 
 ## Table of Contents
 
@@ -11,6 +11,7 @@
 - [Installation](#installation)
 - [`BPlusTree`](#bplustree)
   - [`BPlusTree::new`](#bplustreenew)
+  - [`BPlusTree::from_sorted`](#bplustreefrom_sorted)
   - [`BPlusTree::insert`](#bplustreeinsert)
   - [`BPlusTree::get`](#bplustreeget)
   - [`BPlusTree::contains_key`](#bplustreecontains_key)
@@ -43,9 +44,11 @@ routing to their children — is the structure a storage engine persists as an
 on-disk index. This release keeps the tree in memory; the layout is the durable
 one a pager will later back.
 
-As of `v0.3.0` the ordered-map surface is complete: search, insert, delete (with
-merge and redistribute), ordered iteration, and forward and reverse range scans.
-Latch-coupled concurrent access arrives in a later 0.x release.
+As of `v0.4.0` the in-memory ordered-map surface is complete and feature-frozen:
+search, insert, delete (with merge and redistribute), ordered iteration, forward
+and reverse range scans, and bulk construction from sorted input. A page-backed,
+concurrent backend arrives in a later release; node access already runs through an
+internal storage seam so it is additive.
 
 ---
 
@@ -53,7 +56,7 @@ Latch-coupled concurrent access arrives in a later 0.x release.
 
 ```toml
 [dependencies]
-index-db = "0.3"
+index-db = "0.4"
 ```
 
 The crate is `no_std`-compatible. It uses `alloc` internally, so the only thing
@@ -126,6 +129,56 @@ for k in 0..10_000_u32 {
     index.insert(k, k * 2);
 }
 assert_eq!(index.get(&9_999), Some(&19_998));
+```
+
+---
+
+### `BPlusTree::from_sorted`
+
+```rust
+pub fn from_sorted<I: IntoIterator<Item = (K, V)>>(entries: I) -> BPlusTree<K, V>
+```
+
+Build a tree in bulk from entries already sorted by key.
+
+**Parameters:**
+
+- `entries` — an iterator of `(key, value)` pairs. When the keys are strictly
+  ascending and unique, the tree is built bottom-up in a single fast pass, packed
+  densely. Otherwise it falls back to inserting one entry at a time, so the result
+  is always a correct tree; on that path a later duplicate key overwrites an
+  earlier one.
+
+**Returns:** the populated tree.
+
+Use this when the data is already in order — loading from a sorted file, a range
+scan of another store, or `BTreeMap` keys. It is much faster than repeated
+`insert` and avoids the incremental splitting those would cause.
+
+```rust
+use index_db::BPlusTree;
+
+// Sorted input takes the fast bottom-up path.
+let index = BPlusTree::from_sorted((0..1_000_u32).map(|k| (k, k * k)));
+assert_eq!(index.len(), 1_000);
+assert_eq!(index.get(&30), Some(&900));
+assert_eq!(index.get(&999), Some(&998_001));
+```
+
+The keys of a `BTreeMap` are already sorted, so they bulk-load directly:
+
+```rust
+use std::collections::BTreeMap;
+use index_db::BPlusTree;
+
+let mut source = BTreeMap::new();
+source.insert(10_u32, "a");
+source.insert(20, "b");
+source.insert(30, "c");
+
+let index = BPlusTree::from_sorted(source);
+assert_eq!(index.get(&20), Some(&"b"));
+assert_eq!(index.len(), 3);
 ```
 
 ---
@@ -613,10 +666,11 @@ assert_eq!(it.next_back().map(|(&k, _)| k), Some(4));
 - [`get`](#bplustreeget), [`contains_key`](#bplustreecontains_key), and
   [`range`](#bplustreerange) require `K: Ord` — navigating and bounding the tree
   needs a total order.
-- [`insert`](#bplustreeinsert) and [`remove`](#bplustreeremove) additionally
-  require `K: Clone`. A B+tree copies a separator key up into the parent when a
-  leaf splits, and rewrites separators when nodes borrow on delete, so the key
-  type must be cloneable. Keys such as integers and short strings clone cheaply.
+- [`insert`](#bplustreeinsert), [`remove`](#bplustreeremove), and
+  [`from_sorted`](#bplustreefrom_sorted) additionally require `K: Clone`. A B+tree
+  copies a separator key up into the parent when a leaf splits, and rewrites
+  separators when nodes borrow on delete, so the key type must be cloneable. Keys
+  such as integers and short strings clone cheaply.
 - The structural methods ([`new`](#bplustreenew), [`len`](#bplustreelen),
   [`is_empty`](#bplustreeis_empty), [`height`](#bplustreeheight),
   [`clear`](#bplustreeclear), [`iter`](#bplustreeiter), `Default`) place no bound
@@ -635,6 +689,7 @@ For a tree of `n` entries with node fan-out `b`:
 | `get` / `contains_key` | `O(log n)` | none |
 | `insert` | `O(log n)` | amortized; only on a node split |
 | `remove` | `O(log n)` | none |
+| `from_sorted` (sorted input) | `O(n)` | one pass, no per-entry splitting |
 | `iter` / `range` | `O(log n)` to start, then `O(1)` per entry | one path stack per cursor |
 | `len` / `is_empty` / `height` | `O(1)` / `O(1)` / `O(log n)` | none |
 | `clear` | `O(n)` (drops entries) | none |

@@ -9,6 +9,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-08
+
+Bulk construction and an internal storage seam. The in-memory ordered-map surface
+is now feature-frozen. Node access was routed through an internal node store so a
+page-backed, concurrent backend can be added later without changing the tree
+algorithm.
+
+### Added
+
+- `BPlusTree::from_sorted` — build a tree bottom-up from entries already sorted by
+  key, much faster than inserting one at a time. Unsorted or duplicate input falls
+  back to ordinary insertion, so the result is always correct.
+- `examples/bulk_load.rs`, and benchmarks for range scans and bulk removal.
+
+### Changed
+
+- Internal: nodes are addressed by id through a `NodeStore` seam rather than owned
+  inline, so the same search / insert / delete / bulk-load logic can drive a
+  different backend. The in-memory backend is the only one today. This is an
+  internal refactor; the public API is unchanged.
+- The id indirection costs roughly one extra cache miss per level on point
+  lookups, so `get` is slower at large sizes than `v0.3.0` (about 12 ns at a
+  thousand entries, 79 ns at a million, against 10 ns / 52 ns before); range scans
+  and the other operations are essentially unchanged. The seam is the price of the
+  page-backed backend, which is id-addressed by nature.
+
 ## [0.3.0] - 2026-06-08
 
 Deletion and range scans, completing the ordered-map surface. Entries can be
@@ -67,7 +93,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` (Node 24 actions; fmt, clippy, test, doc, audit, deny) and `.github/FUNDING.yml`.
 
 <!-- LINKS -->
-[Unreleased]: https://github.com/jamesgober/index-db/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jamesgober/index-db/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jamesgober/index-db/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/index-db/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/index-db/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/index-db/releases/tag/v0.1.0

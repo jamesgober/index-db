@@ -29,7 +29,7 @@
         <strong>MSRV is 1.85+</strong> (Rust 2024 edition). Ordered B+tree. Range scans. Latch-coupled concurrent access.
     </p>
     <blockquote>
-        <strong>Status: pre-1.0, in active development.</strong> <code>v0.3.0</code> completes the ordered-map surface &mdash; ordered storage, point lookups, deletion, and forward and reverse range scans. Latch-coupled concurrency lands next per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The public API is frozen at <code>1.0.0</code>.
+        <strong>Status: pre-1.0, in active development.</strong> <code>v0.4.0</code> feature-freezes the in-memory ordered map &mdash; ordered storage, point lookups, deletion, forward and reverse range scans, and bulk construction from sorted input. Node access runs through an internal storage seam so a page-backed, concurrent backend over <code>page-db</code> can be added without changing the tree algorithm; that backend is the next step per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The public API is frozen at <code>1.0.0</code>.
     </blockquote>
 </div>
 
@@ -38,18 +38,18 @@
 
 <h2>What it does</h2>
 
-**Available now (`v0.3.0`):**
+**Available now (`v0.4.0`):**
 
 - **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup, insert, and delete
 - **Self-balancing** &mdash; nodes split on insert and borrow or merge on delete, so the tree stays balanced at every depth on its own
 - **Range scans** &mdash; forward and reverse iteration over a key range, the operation B+trees exist for
-- **Paged node layout** &mdash; sorted keys packed into fixed-capacity nodes, the structure a pager persists as an on-disk index
+- **Bulk load** &mdash; build a balanced tree bottom-up from sorted input in one fast pass
+- **Storage seam** &mdash; nodes are addressed by id through an internal node store, so the same algorithm can later run over a paged, persistent backend
 - **`no_std` support** &mdash; depends only on `alloc`; the `std` feature is optional
 
 **On the roadmap** (see [`dev/ROADMAP.md`](./dev/ROADMAP.md)):
 
-- **Concurrent access** &mdash; latch coupling (crabbing) for many-reader / many-writer traversal without a global lock
-- **Bulk load** &mdash; build a balanced tree bottom-up from sorted input
+- **Page-backed, concurrent backend** &mdash; nodes as `page-db` pages, with latch coupling (crabbing) over the pager's frame guards for many-reader / many-writer traversal. Concurrency is a property of the storage backend, not of the in-memory tree.
 
 <br>
 <hr>
@@ -59,7 +59,7 @@
 
 ```toml
 [dependencies]
-index-db = "0.3"
+index-db = "0.4"
 ```
 
 <br>
@@ -92,6 +92,16 @@ assert_eq!(index.remove(&2), Some("two"));
 assert_eq!(index.len(), 2);
 ```
 
+Build a large index in one pass from sorted data:
+
+```rust
+use index_db::BPlusTree;
+
+let index = BPlusTree::from_sorted((0..1_000_u32).map(|k| (k, k * k)));
+assert_eq!(index.get(&30), Some(&900));
+assert_eq!(index.len(), 1_000);
+```
+
 <br>
 
 ## API Overview
@@ -101,6 +111,7 @@ For the complete reference with examples for every method, see [`docs/API.md`](.
 | Method | Purpose |
 |--------|---------|
 | [`BPlusTree::new`](./docs/API.md#bplustreenew) | Create an empty tree |
+| [`from_sorted`](./docs/API.md#bplustreefrom_sorted) | Bulk-build from sorted entries |
 | [`insert`](./docs/API.md#bplustreeinsert) | Insert or replace a key's value |
 | [`get`](./docs/API.md#bplustreeget) / [`contains_key`](./docs/API.md#bplustreecontains_key) | Point lookup / membership test |
 | [`remove`](./docs/API.md#bplustreeremove) | Delete a key, returning its value |

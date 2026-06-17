@@ -40,10 +40,28 @@ Exit criteria:
 
 ---
 
-## v0.4.0 -- concurrent access via latch coupling + bulk load + feature freeze
+## v0.4.0 -- bulk load + node-storage seam + feature freeze (DONE; latch coupling moved, see below)
+
+`from_sorted` builds a balanced tree bottom-up from sorted input (with an
+insertion fallback for unsorted/duplicate input). Node access was refactored to
+run through an internal `NodeStore` seam (`InMemoryStore` the only backend), so
+the concurrent backend is additive rather than a rewrite. Feature freeze on the
+in-memory surface declared.
+
+**Anti-deferral record — latch coupling moved to a later phase, with reason.**
+The original plan put latch coupling on heap nodes (`Arc<RwLock<Node>>`). That is
+wrong-layer work: it rebuilds `page-db`'s already-loom-checked buffer-pool latches
+one level too high, on throwaway heap nodes, and taxes the in-memory hot path for
+a capability the substrate already provides. The concurrent B+tree is the
+*page-backed* one: a node is a page, traversal fetches pinned `PageGuard`s, and
+crabbing rides on `page-db`'s frame latches. index-db owns only the crabbing
+protocol. The v0.4.0 storage seam is what makes that purely additive. The
+page-backed backend is therefore deferred to a dedicated phase below; it is
+blocked on `page-db` being published (no path deps across portfolio crates).
 
 Exit criteria:
-- [ ] No `todo!`/`unimplemented!`. Feature freeze declared.
+- [x] No `todo!`/`unimplemented!`. Feature freeze declared.
+- [x] Bulk load shipped and tested; node-storage seam in place.
 
 ---
 
@@ -51,6 +69,18 @@ Exit criteria:
 
 Exit criteria:
 - [ ] Public API frozen (recorded here). `cargo audit` + `cargo deny` clean.
+
+---
+
+## Deferred -- page-backed store + latch coupling (crabbing) over `page-db`
+
+A `PageStore` backend behind the v0.4.0 `NodeStore` seam: nodes are pages from
+`page-db`, traversal fetches pinned guards, and concurrent access is latch
+coupling over those guards (acquire the child's latch before releasing the
+parent; release ancestors once a node is "safe"). The crabbing protocol carries a
+`loom` model check; frame-level safety is already covered by `page-db`. Blocked on
+`page-db` publication. This is the headline concurrency feature, relocated here so
+it lands on the right layer rather than hand-rolled on heap nodes.
 
 ---
 

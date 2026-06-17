@@ -4,7 +4,9 @@ use alloc::vec::Vec;
 use core::ops::RangeBounds;
 
 use crate::iter::Iter;
-use crate::node::{Insert, Internal, Node};
+use crate::node::Node;
+use crate::ops;
+use crate::store::{InMemoryStore, NodeId, NodeStore};
 
 /// Smallest fan-out a node may have. With fewer than three children a split
 /// cannot leave both halves non-empty, so the tree could not stay balanced.
@@ -21,14 +23,18 @@ const DEFAULT_ORDER: usize = 64;
 /// operations — [`get`](BPlusTree::get), [`insert`](BPlusTree::insert),
 /// [`contains_key`](BPlusTree::contains_key) — run in time logarithmic in the
 /// number of entries: each level is one binary search over a node, and the
-/// height grows with the logarithm of the entry count.
+/// height grows with the logarithm of the entry count. Beyond point access it
+/// supports ordered iteration and range scans, forward and in reverse.
 ///
-/// The structure is the same one storage engines use for an on-disk index, laid
-/// out so each node maps onto a fixed-size page. This release keeps the tree in
-/// memory; the node layout is the durable one a pager will later persist.
+/// The tree does not own its nodes directly. It addresses them by id through an
+/// internal node store, and the store the nodes live in is a seam: today they
+/// sit in a heap slab (a fast, single-threaded, in-process ordered map), and the
+/// same algorithm can later run over a page-backed store without change. That
+/// seam is internal — the public surface is just this one type.
 ///
-/// `K` must be [`Ord`]; [`insert`](BPlusTree::insert) additionally needs
-/// [`Clone`], because splitting a leaf copies a separator key up into the parent.
+/// `K` must be [`Ord`]; [`insert`](BPlusTree::insert) and
+/// [`remove`](BPlusTree::remove) additionally need [`Clone`], because the tree
+/// copies separator keys between nodes as it splits and rebalances.
 ///
 /// # Examples
 ///
@@ -44,8 +50,10 @@ const DEFAULT_ORDER: usize = 64;
 /// assert_eq!(index.len(), 3);
 /// ```
 pub struct BPlusTree<K, V> {
-    /// Root of the tree. A fresh tree's root is an empty leaf.
-    root: Node<K, V>,
+    /// Id of the root node within `store`.
+    root: NodeId,
+    /// Backend the nodes live in.
+    store: InMemoryStore<K, V>,
     /// Maximum fan-out: the most children an internal node may hold, and one
     /// more than the most keys any node may hold.
     order: usize,
@@ -76,13 +84,73 @@ impl<K, V> BPlusTree<K, V> {
     /// [`new`]: BPlusTree::new
     #[must_use]
     pub(crate) fn with_order(order: usize) -> Self {
+        let mut store = InMemoryStore::new();
+        let root = store.alloc(Node::empty_leaf());
         BPlusTree {
-            root: Node::empty_leaf(),
-            order: if order < MIN_ORDER { MIN_ORDER } else { order },
+            root,
+            store,
+            order: order.max(MIN_ORDER),
             len: 0,
         }
     }
+}
 
+impl<K: Ord + Clone, V> BPlusTree<K, V> {
+    /// Build a tree in bulk from entries already sorted by key.
+    ///
+    /// When the input is sorted strictly ascending by key, the tree is built
+    /// bottom-up — leaves packed and balanced in one pass — which is much faster
+    /// than inserting one entry at a time. If the input is *not* strictly
+    /// ascending (out of order or with duplicate keys), it falls back to ordinary
+    /// insertion, so the result is always a correct tree; only the fast path
+    /// requires sorted, unique keys. On the fallback path a later duplicate key
+    /// overwrites an earlier one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use index_db::BPlusTree;
+    ///
+    /// // Sorted input takes the fast bottom-up path.
+    /// let index = BPlusTree::from_sorted((0..1_000_u32).map(|k| (k, k * k)));
+    /// assert_eq!(index.len(), 1_000);
+    /// assert_eq!(index.get(&30), Some(&900));
+    /// assert_eq!(index.get(&999), Some(&998_001));
+    /// ```
+    #[must_use]
+    pub fn from_sorted<I: IntoIterator<Item = (K, V)>>(entries: I) -> Self {
+        Self::from_sorted_with_order(entries, DEFAULT_ORDER)
+    }
+
+    /// [`from_sorted`](Self::from_sorted) with an explicit fan-out, for tests.
+    #[must_use]
+    pub(crate) fn from_sorted_with_order<I>(entries: I, order: usize) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
+        let order = order.max(MIN_ORDER);
+        let entries: Vec<(K, V)> = entries.into_iter().collect();
+        let ascending = entries.windows(2).all(|w| w[0].0 < w[1].0);
+        if ascending {
+            let mut store = InMemoryStore::new();
+            let (root, len) = ops::bulk_load(&mut store, entries, order);
+            BPlusTree {
+                root,
+                store,
+                order,
+                len,
+            }
+        } else {
+            let mut tree = Self::with_order(order);
+            for (key, value) in entries {
+                let _previous = tree.insert(key, value);
+            }
+            tree
+        }
+    }
+}
+
+impl<K, V> BPlusTree<K, V> {
     /// The number of entries in the tree.
     ///
     /// # Examples
@@ -117,7 +185,9 @@ impl<K, V> BPlusTree<K, V> {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+}
 
+impl<K, V> BPlusTree<K, V> {
     /// The height of the tree in levels: a tree whose root is a leaf has height
     /// one, and every level of internal nodes above the leaves adds one more.
     ///
@@ -139,10 +209,10 @@ impl<K, V> BPlusTree<K, V> {
     #[must_use]
     pub fn height(&self) -> usize {
         let mut height = 1;
-        let mut node = &self.root;
-        while let Node::Internal(internal) = node {
+        let mut id = self.root;
+        while let Node::Internal(internal) = self.store.get(id) {
             height += 1;
-            node = &internal.children[0];
+            id = internal.children[0];
         }
         height
     }
@@ -161,7 +231,7 @@ impl<K, V> BPlusTree<K, V> {
     /// assert_eq!(index.get(&1), None);
     /// ```
     pub fn clear(&mut self) {
-        self.root = Node::empty_leaf();
+        self.root = self.store.reset();
         self.len = 0;
     }
 
@@ -189,7 +259,7 @@ impl<K, V> BPlusTree<K, V> {
     /// ```
     #[must_use]
     pub fn iter(&self) -> Iter<'_, K, V> {
-        Iter::full(&self.root)
+        Iter::full(&self.store, self.root)
     }
 }
 
@@ -209,7 +279,7 @@ impl<K: Ord, V> BPlusTree<K, V> {
     #[must_use]
     #[inline]
     pub fn get(&self, key: &K) -> Option<&V> {
-        self.root.get(key)
+        ops::get(&self.store, self.root, key)
     }
 
     /// Whether the tree holds an entry for `key`.
@@ -262,16 +332,12 @@ impl<K: Ord, V> BPlusTree<K, V> {
     /// ```
     #[must_use]
     pub fn range<R: RangeBounds<K>>(&self, range: R) -> Iter<'_, K, V> {
-        Iter::range(&self.root, range.start_bound(), range.end_bound())
-    }
-}
-
-impl<'a, K, V> IntoIterator for &'a BPlusTree<K, V> {
-    type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
+        Iter::range(
+            &self.store,
+            self.root,
+            range.start_bound(),
+            range.end_bound(),
+        )
     }
 }
 
@@ -291,18 +357,12 @@ impl<K: Ord + Clone, V> BPlusTree<K, V> {
     /// assert_eq!(index.get(&1), Some(&"b"));
     /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        match self.root.insert(key, value, self.order) {
-            Insert::Replaced(old) => Some(old),
-            Insert::Inserted => {
-                self.len = self.len.saturating_add(1);
-                None
-            }
-            Insert::Split { sep, right } => {
-                self.grow_root(sep, right);
-                self.len = self.len.saturating_add(1);
-                None
-            }
+        let (replaced, root) = ops::insert(&mut self.store, self.root, key, value, self.order);
+        self.root = root;
+        if replaced.is_none() {
+            self.len = self.len.saturating_add(1);
         }
+        replaced
     }
 
     /// Remove `key`, returning its value if it was present, or `None` if the
@@ -327,10 +387,11 @@ impl<K: Ord + Clone, V> BPlusTree<K, V> {
     /// assert_eq!(index.len(), 1);
     /// ```
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        let removed = self.root.remove(key, self.min_keys());
+        let min_keys = self.min_keys();
+        let (removed, root) = ops::remove(&mut self.store, self.root, key, min_keys);
+        self.root = root;
         if removed.is_some() {
             self.len -= 1;
-            self.shrink_root();
         }
         removed
     }
@@ -341,37 +402,20 @@ impl<K: Ord + Clone, V> BPlusTree<K, V> {
     fn min_keys(&self) -> usize {
         self.order.div_ceil(2) - 1
     }
-
-    /// Collapse the root when it is an internal node left with a single child:
-    /// that child becomes the new root, lowering the tree by one level. This is
-    /// the only operation that decreases the tree's height.
-    fn shrink_root(&mut self) {
-        let only_child = match &mut self.root {
-            Node::Internal(internal) if internal.children.len() == 1 => internal.children.pop(),
-            _ => None,
-        };
-        if let Some(child) = only_child {
-            self.root = child;
-        }
-    }
-
-    /// Replace the root with a new internal node over the old root and the right
-    /// half promoted by a split. This is the only operation that increases the
-    /// tree's height, and it keeps every leaf at the same depth.
-    fn grow_root(&mut self, sep: K, right: Node<K, V>) {
-        let old_root = core::mem::replace(&mut self.root, Node::empty_leaf());
-        let mut keys = Vec::with_capacity(self.order);
-        keys.push(sep);
-        let mut children = Vec::with_capacity(self.order + 1);
-        children.push(old_root);
-        children.push(right);
-        self.root = Node::Internal(Internal { keys, children });
-    }
 }
 
 impl<K, V> Default for BPlusTree<K, V> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a BPlusTree<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -384,17 +428,17 @@ mod tests {
 
     use super::*;
 
-    /// Recursively verify the structural invariants of the subtree rooted at
-    /// `node`, returning its `(min_key, max_key, height)` for the parent to
-    /// check separators against. Panics with a description on the first
-    /// violation so a failing property shrinks to a readable case.
+    /// Recursively verify the structural invariants of the subtree at `id`,
+    /// returning its `(min_key, max_key, height)` for the parent to check
+    /// separators against. Panics with a description on the first violation.
     fn check<K: Ord + Clone + core::fmt::Debug, V>(
-        node: &Node<K, V>,
+        store: &InMemoryStore<K, V>,
+        id: NodeId,
         order: usize,
         min_keys: usize,
         is_root: bool,
     ) -> (K, K, usize) {
-        match node {
+        match store.get(id) {
             Node::Leaf(leaf) => {
                 assert!(!leaf.keys.is_empty(), "non-root leaf is empty");
                 assert!(
@@ -446,7 +490,7 @@ mod tests {
                 let mut subtree_min = None;
                 let mut last_max: Option<K> = None;
                 for (i, child) in internal.children.iter().enumerate() {
-                    let (cmin, cmax, h) = check(child, order, min_keys, false);
+                    let (cmin, cmax, h) = check(store, *child, order, min_keys, false);
                     match child_height {
                         None => child_height = Some(h),
                         Some(prev) => assert_eq!(prev, h, "subtrees differ in height (unbalanced)"),
@@ -454,11 +498,9 @@ mod tests {
                     if subtree_min.is_none() {
                         subtree_min = Some(cmin.clone());
                     }
-                    // Separator i - 1 sits between child i - 1 and child i. It
-                    // routes: everything left of it is below it, everything in
-                    // and under the right child is at or above it. (After a
-                    // delete the separator may be strictly below the right min,
-                    // so this is `<=`, not equality.)
+                    // Routing separator: max(left) < sep <= min(right). After a
+                    // delete the separator may sit strictly below the right min,
+                    // so this is `<=`, not equality.
                     if i > 0 {
                         let sep = &internal.keys[i - 1];
                         assert!(
@@ -470,8 +512,6 @@ mod tests {
                     last_max = Some(cmax);
                 }
                 let height = child_height.map_or(1, |h| h + 1);
-                // Internal nodes always carry at least two children, so both
-                // accumulators are populated by the loop above.
                 match (subtree_min, last_max) {
                     (Some(min), Some(max)) => (min, max, height),
                     _ => panic!("internal node with no children"),
@@ -480,19 +520,18 @@ mod tests {
         }
     }
 
-    /// `check` entry point: derives `min_keys` from `order` and treats the tree
-    /// root as exempt from the minimum-occupancy rule.
+    /// `check` entry point: treats the tree root as exempt from minimum occupancy.
     fn check_tree<K: Ord + Clone + core::fmt::Debug, V>(tree: &BPlusTree<K, V>) {
-        let _bounds = check(&tree.root, tree.order, tree.min_keys(), true);
+        let _bounds = check(&tree.store, tree.root, tree.order, tree.min_keys(), true);
     }
 
-    /// Walk the leaves left to right and collect every entry key in order.
-    fn collect_keys<K: Clone, V>(node: &Node<K, V>, out: &mut Vec<K>) {
-        match node {
+    /// Collect every entry key left to right across the leaves.
+    fn collect_keys<K: Clone, V>(store: &InMemoryStore<K, V>, id: NodeId, out: &mut Vec<K>) {
+        match store.get(id) {
             Node::Leaf(leaf) => out.extend(leaf.keys.iter().cloned()),
             Node::Internal(internal) => {
                 for child in &internal.children {
-                    collect_keys(child, out);
+                    collect_keys(store, *child, out);
                 }
             }
         }
@@ -539,51 +578,9 @@ mod tests {
             assert_eq!(tree.insert(k, k), None);
         }
         let mut keys = Vec::new();
-        collect_keys(&tree.root, &mut keys);
+        collect_keys(&tree.store, tree.root, &mut keys);
         assert_eq!(keys.len(), 100);
         assert!(keys.windows(2).all(|w| w[0] < w[1]), "leaf order broken");
-    }
-
-    proptest! {
-        #[test]
-        fn prop_matches_reference_map(
-            order in 3_usize..8,
-            ops in prop::collection::vec((0_u32..200, 0_u32..1_000_000), 0..400),
-        ) {
-            use std::collections::BTreeMap;
-
-            let mut tree = BPlusTree::with_order(order);
-            let mut reference = BTreeMap::new();
-            for (k, v) in ops {
-                let got = tree.insert(k, v);
-                let want = reference.insert(k, v);
-                prop_assert_eq!(got, want);
-            }
-
-            prop_assert_eq!(tree.len(), reference.len());
-            // The structural check assumes a populated tree; the empty tree's
-            // root is a legitimately empty leaf, which `check` would reject.
-            if !tree.is_empty() {
-                check_tree(&tree);
-            }
-
-            // Every key in the reference is found with the same value.
-            for (k, v) in &reference {
-                prop_assert_eq!(tree.get(k), Some(v));
-            }
-            // A key the reference lacks is absent from the tree too.
-            for k in 0_u32..200 {
-                if !reference.contains_key(&k) {
-                    prop_assert_eq!(tree.get(&k), None);
-                }
-            }
-
-            // The leaves, read left to right, are exactly the sorted key set.
-            let mut keys = Vec::new();
-            collect_keys(&tree.root, &mut keys);
-            let expected: Vec<u32> = reference.keys().copied().collect();
-            prop_assert_eq!(keys, expected);
-        }
     }
 
     #[test]
@@ -612,7 +609,6 @@ mod tests {
             let _ = tree.insert(k, k);
         }
         assert!(tree.height() > 1);
-        // Remove in an order unrelated to insertion to drive merges/borrows.
         for k in (0..200_u32).step_by(2) {
             assert_eq!(tree.remove(&k), Some(k));
         }
@@ -636,6 +632,31 @@ mod tests {
         for k in 0..500_u32 {
             assert_eq!(tree.get(&k), if k % 3 == 0 { None } else { Some(&k) });
         }
+    }
+
+    #[test]
+    fn test_bulk_load_builds_balanced_tree() {
+        for &n in &[0_u32, 1, 2, 5, 63, 64, 65, 1_000] {
+            let tree = BPlusTree::from_sorted_with_order((0..n).map(|k| (k, k * 2)), 5);
+            assert_eq!(tree.len(), n as usize);
+            if n > 0 {
+                check_tree(&tree);
+            }
+            for k in 0..n {
+                assert_eq!(tree.get(&k), Some(&(k * 2)));
+            }
+            let keys: Vec<_> = tree.iter().map(|(&k, _)| k).collect();
+            assert_eq!(keys, (0..n).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn test_bulk_load_unsorted_falls_back() {
+        let tree = BPlusTree::from_sorted_with_order([(3_u32, 3), (1, 1), (2, 2), (1, 9)], 4);
+        assert_eq!(tree.len(), 3);
+        assert_eq!(tree.get(&1), Some(&9)); // last write wins on the fallback path
+        let keys: Vec<_> = tree.iter().map(|(&k, _)| k).collect();
+        assert_eq!(keys, vec![1, 2, 3]);
     }
 
     #[test]
@@ -682,7 +703,6 @@ mod tests {
             }
             take_front = !take_front;
         }
-        // Pulled alternately from each end, the entries interleave and meet.
         assert_eq!(seq, vec![0, 8, 1, 7, 2, 6, 3, 5, 4]);
     }
 
@@ -698,7 +718,6 @@ mod tests {
         assert_eq!(collect(tree.range(..3)), vec![0, 1, 2]);
         assert_eq!(collect(tree.range(17..)), vec![17, 18, 19]);
         assert_eq!(collect(tree.range(100..200)), Vec::<u32>::new());
-        // A bound that falls between existing keys.
         let mut sparse = BPlusTree::with_order(3);
         for k in [0_u32, 10, 20, 30, 40] {
             let _ = sparse.insert(k, k);
@@ -707,8 +726,37 @@ mod tests {
     }
 
     proptest! {
-        /// Forward iteration, reverse iteration, and arbitrary ranges all match
-        /// `BTreeMap` over the same data.
+        #[test]
+        fn prop_matches_reference_map(
+            order in 3_usize..8,
+            ops in prop::collection::vec((0_u32..200, 0_u32..1_000_000), 0..400),
+        ) {
+            use std::collections::BTreeMap;
+
+            let mut tree = BPlusTree::with_order(order);
+            let mut reference = BTreeMap::new();
+            for (k, v) in ops {
+                prop_assert_eq!(tree.insert(k, v), reference.insert(k, v));
+            }
+
+            prop_assert_eq!(tree.len(), reference.len());
+            if !tree.is_empty() {
+                check_tree(&tree);
+            }
+            for (k, v) in &reference {
+                prop_assert_eq!(tree.get(k), Some(v));
+            }
+            for k in 0_u32..200 {
+                if !reference.contains_key(&k) {
+                    prop_assert_eq!(tree.get(&k), None);
+                }
+            }
+            let mut keys = Vec::new();
+            collect_keys(&tree.store, tree.root, &mut keys);
+            let expected: Vec<u32> = reference.keys().copied().collect();
+            prop_assert_eq!(keys, expected);
+        }
+
         #[test]
         fn prop_iter_and_range_match_reference(
             order in 3_usize..8,
@@ -743,8 +791,6 @@ mod tests {
             prop_assert_eq!(tree_incl, ref_incl);
         }
 
-        /// A mixed insert/remove workload tracks `BTreeMap` exactly, and the tree
-        /// stays a valid, balanced, minimally-occupied B+tree throughout.
         #[test]
         fn prop_insert_remove_matches_reference(
             order in 3_usize..8,
@@ -767,9 +813,25 @@ mod tests {
             }
 
             let mut keys = Vec::new();
-            collect_keys(&tree.root, &mut keys);
+            collect_keys(&tree.store, tree.root, &mut keys);
             let expected: Vec<u32> = reference.keys().copied().collect();
             prop_assert_eq!(keys, expected);
+        }
+
+        #[test]
+        fn prop_bulk_load_matches_inserts(
+            order in 3_usize..8,
+            keys in prop::collection::btree_set(0_u32..1_000, 0..400),
+        ) {
+            let sorted: Vec<(u32, u32)> = keys.iter().map(|&k| (k, k)).collect();
+            let bulk = BPlusTree::from_sorted_with_order(sorted.iter().copied(), order);
+            prop_assert_eq!(bulk.len(), keys.len());
+            if !bulk.is_empty() {
+                check_tree(&bulk);
+            }
+            let bulk_keys: Vec<_> = bulk.iter().map(|(&k, _)| k).collect();
+            let expected: Vec<u32> = keys.iter().copied().collect();
+            prop_assert_eq!(bulk_keys, expected);
         }
     }
 }
