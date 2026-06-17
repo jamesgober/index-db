@@ -725,7 +725,136 @@ mod tests {
         assert_eq!(collect(sparse.range(5..35)), vec![10, 20, 30]);
     }
 
+    /// Drive an adversarial workload at a small order across pathological
+    /// orderings, checking the structural invariants after every delete and the
+    /// contents against a reference set at the end.
+    fn adversarial_workload(order: usize, inserts: &[u32], deletes: &[u32]) {
+        use std::collections::BTreeSet;
+
+        let mut tree = BPlusTree::with_order(order);
+        let mut reference = BTreeSet::new();
+        for &k in inserts {
+            let _ = tree.insert(k, k);
+            let _ = reference.insert(k);
+        }
+        check_tree(&tree);
+        for &k in deletes {
+            let in_tree = tree.remove(&k).is_some();
+            let in_ref = reference.remove(&k);
+            assert_eq!(in_tree, in_ref, "remove({k}) disagreed with reference");
+            if !tree.is_empty() {
+                check_tree(&tree);
+            }
+        }
+        let keys: Vec<u32> = tree.iter().map(|(&k, _)| k).collect();
+        let expected: Vec<u32> = reference.iter().copied().collect();
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn test_adversarial_ascending_insert_descending_delete() {
+        for &order in &[3_usize, 4, 5, 7, 16] {
+            let inserts: Vec<u32> = (0..400).collect();
+            let deletes: Vec<u32> = (0..400).rev().collect();
+            adversarial_workload(order, &inserts, &deletes);
+        }
+    }
+
+    #[test]
+    fn test_adversarial_descending_insert_ascending_delete() {
+        for &order in &[3_usize, 4, 5, 7, 16] {
+            let inserts: Vec<u32> = (0..400).rev().collect();
+            let deletes: Vec<u32> = (0..400).collect();
+            adversarial_workload(order, &inserts, &deletes);
+        }
+    }
+
+    #[test]
+    fn test_adversarial_zigzag_insert_middle_out_delete() {
+        for &order in &[3_usize, 4, 6] {
+            // Insert from both ends toward the middle.
+            let mut inserts = Vec::new();
+            let (mut lo, mut hi) = (0_u32, 399_u32);
+            while lo <= hi {
+                inserts.push(lo);
+                if lo != hi {
+                    inserts.push(hi);
+                }
+                lo += 1;
+                hi = hi.wrapping_sub(1);
+            }
+            // Delete from the middle outward.
+            let mut deletes = Vec::new();
+            let (mut left, mut right) = (199_i32, 200_i32);
+            while left >= 0 || right < 400 {
+                if left >= 0 {
+                    deletes.push(left as u32);
+                    left -= 1;
+                }
+                if right < 400 {
+                    deletes.push(right as u32);
+                    right += 1;
+                }
+            }
+            adversarial_workload(order, &inserts, &deletes);
+        }
+    }
+
+    #[test]
+    fn test_adversarial_clustered_keys() {
+        // Many keys packed into a narrow band, so most splits happen in one
+        // subtree before the tree balances out.
+        let inserts: Vec<u32> = (1_000_000..1_000_500).collect();
+        let deletes: Vec<u32> = (1_000_000..1_000_500).step_by(3).collect();
+        adversarial_workload(3, &inserts, &deletes);
+    }
+
+    #[test]
+    fn test_adversarial_repeated_overwrite_then_clear() {
+        let mut tree = BPlusTree::with_order(4);
+        for round in 0..50_u32 {
+            for k in 0..100_u32 {
+                let _ = tree.insert(k, round * 100 + k);
+            }
+        }
+        assert_eq!(tree.len(), 100);
+        for k in 0..100_u32 {
+            assert_eq!(tree.get(&k), Some(&(49 * 100 + k)));
+        }
+        check_tree(&tree);
+        tree.clear();
+        assert!(tree.is_empty());
+        assert_eq!(tree.height(), 1);
+    }
+
     proptest! {
+        /// Adversarial generator: small order, a wide key band relative to the
+        /// op count so splits and merges churn, every op checked against the
+        /// reference and the structural invariants.
+        #[test]
+        fn prop_adversarial_small_order(
+            order in 3_usize..6,
+            ops in prop::collection::vec((any::<bool>(), 0_u32..60), 0..800),
+        ) {
+            use std::collections::BTreeMap;
+
+            let mut tree = BPlusTree::with_order(order);
+            let mut reference = BTreeMap::new();
+            for (is_insert, k) in ops {
+                if is_insert {
+                    prop_assert_eq!(tree.insert(k, k), reference.insert(k, k));
+                } else {
+                    prop_assert_eq!(tree.remove(&k), reference.remove(&k));
+                }
+                prop_assert_eq!(tree.len(), reference.len());
+                if !tree.is_empty() {
+                    check_tree(&tree);
+                }
+            }
+            let keys: Vec<u32> = tree.iter().map(|(&k, _)| k).collect();
+            let expected: Vec<u32> = reference.keys().copied().collect();
+            prop_assert_eq!(keys, expected);
+        }
         #[test]
         fn prop_matches_reference_map(
             order in 3_usize..8,

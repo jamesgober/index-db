@@ -1,9 +1,10 @@
 # index-db &mdash; API Reference
 
 > Complete reference for every public item in `index-db`, with examples.
-> **Status: pre-1.0.** This documents the surface shipped in `v0.4.0`, which
-> feature-freezes the in-memory ordered map. A page-backed, concurrent backend is
-> the planned next step. See [`dev/ROADMAP.md`](../dev/ROADMAP.md).
+> **Status: pre-1.0, API frozen.** As of `v0.5.0` the public surface below is
+> frozen ahead of 1.0; the only planned change is an additive, defaulted store
+> type parameter when the page-backed, concurrent backend lands. See
+> [`dev/ROADMAP.md`](../dev/ROADMAP.md).
 
 ## Table of Contents
 
@@ -44,11 +45,12 @@ routing to their children — is the structure a storage engine persists as an
 on-disk index. This release keeps the tree in memory; the layout is the durable
 one a pager will later back.
 
-As of `v0.4.0` the in-memory ordered-map surface is complete and feature-frozen:
-search, insert, delete (with merge and redistribute), ordered iteration, forward
-and reverse range scans, and bulk construction from sorted input. A page-backed,
-concurrent backend arrives in a later release; node access already runs through an
-internal storage seam so it is additive.
+As of `v0.5.0` the in-memory ordered-map surface is complete and the public API
+is frozen: search, insert, delete (with merge and redistribute), ordered
+iteration, forward and reverse range scans, and bulk construction from sorted
+input. The tree is `Sync`, so any number of threads may read it concurrently. A
+page-backed, concurrent (write-side) backend arrives in a later release; node
+access already runs through an internal storage seam so it is additive.
 
 ---
 
@@ -56,7 +58,7 @@ internal storage seam so it is additive.
 
 ```toml
 [dependencies]
-index-db = "0.4"
+index-db = "0.5"
 ```
 
 The crate is `no_std`-compatible. It uses `alloc` internally, so the only thing
@@ -65,7 +67,7 @@ the default `std` feature adds today is the standard prelude; disable it for a
 
 ```toml
 [dependencies]
-index-db = { version = "0.2", default-features = false }
+index-db = { version = "0.5", default-features = false }
 ```
 
 ---

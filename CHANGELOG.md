@@ -9,6 +9,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-08
+
+Hardening and the public API freeze. No new public surface — this release adds
+adversarial and large-scale stress tests and locks the API ahead of 1.0.
+
+### Added
+
+- Adversarial unit and property tests over pathological key distributions:
+  ascending / descending / zigzag inserts against opposite-order and middle-out
+  deletes, clustered keys, repeated overwrites, and a small-order adversarial
+  property test, all checking the structural invariants after every delete.
+- `tests/stress.rs`: large scattered insert/delete (50k), sustained
+  insert/delete churn, bulk-load then heavy delete, adversarial string keys, and
+  a concurrent-reader test that runs eight threads traversing a shared tree at
+  once (the in-memory tree is `Sync`).
+
+### Notes
+
+- **The public API is frozen** as of this release: `BPlusTree::{new, from_sorted,
+  insert, get, contains_key, remove, iter, range, len, is_empty, height, clear}`,
+  the `Default` and `IntoIterator for &BPlusTree` impls, and the `Iter` iterator.
+  The only change planned before 1.0 is an additive, defaulted store type
+  parameter when the page-backed backend lands.
+
 ## [0.4.0] - 2026-06-08
 
 Bulk construction and an internal storage seam. The in-memory ordered-map surface
@@ -93,7 +117,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` (Node 24 actions; fmt, clippy, test, doc, audit, deny) and `.github/FUNDING.yml`.
 
 <!-- LINKS -->
-[Unreleased]: https://github.com/jamesgober/index-db/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jamesgober/index-db/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jamesgober/index-db/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/index-db/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/index-db/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/index-db/compare/v0.1.0...v0.2.0

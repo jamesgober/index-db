@@ -65,10 +65,30 @@ Exit criteria:
 
 ---
 
-## v0.5.0 -- adversarial key distributions + concurrent-traversal stress + API freeze
+## v0.5.0 -- adversarial key distributions + concurrent-traversal stress + API freeze (DONE)
+
+Adversarial workloads added: ascending/descending/zigzag insert against
+opposite-order and middle-out deletes, clustered keys, repeated overwrite, plus a
+small-order adversarial property test — all checking the structural invariants
+after every delete. Large-scale stress (`tests/stress.rs`): scattered
+insert/delete at 50k, sustained churn, bulk-load-then-delete, adversarial string
+keys. **Concurrent-traversal stress** for the in-memory tree means concurrent
+*reads*: the tree is `Sync`, so `tests/stress.rs` runs eight threads doing
+`get` / `iter` / `range` over a shared `&tree` at once (the test does not compile
+unless `BPlusTree: Sync`). Write-side concurrency is the deferred page backend.
+
+**Public API — FROZEN as of v0.5.0:**
+- `BPlusTree<K, V>`: `new`, `from_sorted`, `insert`, `get`, `contains_key`,
+  `remove`, `iter`, `range`, `len`, `is_empty`, `height`, `clear`.
+- Trait impls: `Default`, `IntoIterator for &BPlusTree`.
+- `Iter<'a, K, V>`: `Iterator` + `DoubleEndedIterator`, item `(&K, &V)`.
+
+No public item is added or changed before 1.0 except a future additive `S` store
+type parameter on `BPlusTree`/`Iter` when the page-backed backend lands (a
+defaulted parameter, non-breaking).
 
 Exit criteria:
-- [ ] Public API frozen (recorded here). `cargo audit` + `cargo deny` clean.
+- [x] Public API frozen (recorded here). `cargo audit` + `cargo deny` clean.
 
 ---
 

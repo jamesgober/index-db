@@ -29,7 +29,7 @@
         <strong>MSRV is 1.85+</strong> (Rust 2024 edition). Ordered B+tree. Range scans. Latch-coupled concurrent access.
     </p>
     <blockquote>
-        <strong>Status: pre-1.0, in active development.</strong> <code>v0.4.0</code> feature-freezes the in-memory ordered map &mdash; ordered storage, point lookups, deletion, forward and reverse range scans, and bulk construction from sorted input. Node access runs through an internal storage seam so a page-backed, concurrent backend over <code>page-db</code> can be added without changing the tree algorithm; that backend is the next step per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The public API is frozen at <code>1.0.0</code>.
+        <strong>Status: pre-1.0, in active development.</strong> <code>v0.5.0</code> freezes the public API of the in-memory ordered map &mdash; ordered storage, point lookups, deletion, forward and reverse range scans, and bulk construction from sorted input &mdash; and hardens it with adversarial and large-scale stress tests. The tree is <code>Sync</code>, so any number of threads may read it at once. Node access runs through an internal storage seam so a page-backed, concurrent backend over <code>page-db</code> can be added without changing the tree algorithm; that backend is the next step per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -38,7 +38,7 @@
 
 <h2>What it does</h2>
 
-**Available now (`v0.4.0`):**
+**Available now (`v0.5.0`):**
 
 - **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup, insert, and delete
 - **Self-balancing** &mdash; nodes split on insert and borrow or merge on delete, so the tree stays balanced at every depth on its own
@@ -59,7 +59,7 @@
 
 ```toml
 [dependencies]
-index-db = "0.4"
+index-db = "0.5"
 ```
 
 <br>
