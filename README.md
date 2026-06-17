@@ -29,7 +29,7 @@
         <strong>MSRV is 1.85+</strong> (Rust 2024 edition). Ordered B+tree. Range scans. Latch-coupled concurrent access.
     </p>
     <blockquote>
-        <strong>Status: pre-1.0, in active development.</strong> <code>v0.5.0</code> freezes the public API of the in-memory ordered map &mdash; ordered storage, point lookups, deletion, forward and reverse range scans, and bulk construction from sorted input &mdash; and hardens it with adversarial and large-scale stress tests. The tree is <code>Sync</code>, so any number of threads may read it at once. Node access runs through an internal storage seam so a page-backed, concurrent backend over <code>page-db</code> can be added without changing the tree algorithm; that backend is the next step per <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: 1.0 &mdash; stable, API frozen until 2.0.</strong> <code>v1.0.0</code> is the stable in-memory ordered map &mdash; ordered storage, point lookups, deletion, forward and reverse range scans, and bulk construction from sorted input &mdash; hardened with adversarial, large-scale, and sustained soak tests. The tree is <code>Sync</code>, so any number of threads may read it at once. Node access runs through an internal storage seam so a page-backed, concurrent (write-side) backend over <code>page-db</code> arrives additively in a 1.x release without breaking this API. See <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -38,7 +38,7 @@
 
 <h2>What it does</h2>
 
-**Available now (`v0.5.0`):**
+**Available now (`v1.0.0`):**
 
 - **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup, insert, and delete
 - **Self-balancing** &mdash; nodes split on insert and borrow or merge on delete, so the tree stays balanced at every depth on its own
@@ -59,7 +59,7 @@
 
 ```toml
 [dependencies]
-index-db = "0.5"
+index-db = "1"
 ```
 
 <br>
@@ -106,7 +106,7 @@ assert_eq!(index.len(), 1_000);
 
 ## API Overview
 
-For the complete reference with examples for every method, see [`docs/API.md`](./docs/API.md).
+For the complete reference with examples for every method, see [`docs/API.md`](./docs/API.md). For benchmark baselines, see [`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md).
 
 | Method | Purpose |
 |--------|---------|

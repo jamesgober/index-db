@@ -92,21 +92,33 @@ Exit criteria:
 
 ---
 
-## Deferred -- page-backed store + latch coupling (crabbing) over `page-db`
-
-A `PageStore` backend behind the v0.4.0 `NodeStore` seam: nodes are pages from
-`page-db`, traversal fetches pinned guards, and concurrent access is latch
-coupling over those guards (acquire the child's latch before releasing the
-parent; release ancestors once a node is "safe"). The crabbing protocol carries a
-`loom` model check; frame-level safety is already covered by `page-db`. Blocked on
-`page-db` publication. This is the headline concurrency feature, relocated here so
-it lands on the right layer rather than hand-rolled on heap nodes.
-
----
-
 ## v0.6.0 -> v1.0.0 -- Alpha / Beta / RC / Stable
 
 Integrate against real consumers, broaden testing, capture final benchmarks, then freeze the public API until 2.0 and publish.
+
+- **v0.6.0 -- Alpha (DONE).** API frozen; sustained consumer-shaped soak
+  (`tests/soak.rs`, 200k mixed ops vs `BTreeMap`); benchmark baselines recorded
+  (`docs/PERFORMANCE.md`). No new API.
+- **v1.0.0 -- Stable (DONE).** Definition-of-Done audit passed; inert `serde`
+  feature + optional dep removed (now zero runtime deps); public API frozen until
+  2.0. Ships as the stable *in-memory* ordered B+tree. (Beta/RC soak content was
+  already satisfied by the v0.5/v0.6 adversarial, stress, and soak suites, so the
+  intermediate tags were folded into 1.0.)
+
+**1.0 scoping decision (settled):** 1.0 ships as the stable in-memory tree. The
+page-backed concurrent (write-side) backend lands additively in a 1.x release —
+the storage seam makes it non-breaking. Concurrent reads work today (the tree is
+`Sync`).
+
+---
+
+## 1.x -- page-backed store + latch coupling (additive)
+
+A `PageStore` backend behind the v0.4.0 `NodeStore` seam: nodes are pages from
+`page-db`, traversal fetches pinned guards, and concurrent access is latch
+coupling (crabbing) over those guards. Carries a `loom` model check; frame-level
+safety is covered by `page-db`. Added as a 1.x minor — a defaulted `S` store type
+parameter on `BPlusTree`/`Iter`, non-breaking for existing `BPlusTree<K, V>` code.
 
 ---
 

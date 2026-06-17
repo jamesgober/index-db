@@ -34,13 +34,13 @@
 //!
 //! ## Scope
 //!
-//! As of `v0.5.0` the in-memory ordered-map surface is complete and the public
-//! API is frozen: search, insert, delete (with merge and redistribute), forward
-//! and reverse range scans, and bulk construction from sorted input. The tree is
-//! [`Sync`], so any number of threads may read it at once. Node access runs
-//! through an internal storage seam so that a page-backed, concurrent backend
-//! over `page-db` can be added without changing the tree algorithm; that backend
-//! is the planned next step. See `dev/ROADMAP.md`.
+//! `v1.0.0` is the stable in-memory ordered map. The public API is frozen until
+//! 2.0: search, insert, delete (with merge and redistribute), forward and reverse
+//! range scans, and bulk construction from sorted input. The tree is [`Sync`], so
+//! any number of threads may read it at once. Node access runs through an
+//! internal storage seam so that a page-backed, concurrent (write-side) backend
+//! over `page-db` can be added in a 1.x release without changing the tree
+//! algorithm or breaking this API. See `dev/ROADMAP.md`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

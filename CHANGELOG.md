@@ -9,6 +9,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-08
+
+First stable release: the in-memory ordered B+tree. The public API is frozen
+until 2.0.
+
+### Changed
+
+- Removed the inert `serde` feature and its optional dependency. It gated no code
+  (there was no `Serialize`/`Deserialize` implementation) and serde is not
+  index-db's persistence path — the page-backed backend is. index-db now has no
+  runtime dependencies.
+
+### Stable surface (frozen until 2.0)
+
+- `BPlusTree<K, V>`: `new`, `from_sorted`, `insert`, `get`, `contains_key`,
+  `remove`, `iter`, `range`, `len`, `is_empty`, `height`, `clear`.
+- Trait impls: `Default`, `IntoIterator for &BPlusTree`.
+- `Iter<'a, K, V>`: `Iterator` + `DoubleEndedIterator`, item `(&K, &V)`.
+
+### Notes
+
+- The page-backed, concurrent (write-side) backend — a `PageStore` behind the
+  storage seam, with latch coupling over `page-db`'s page guards — will arrive in
+  a 1.x release. The seam makes it an additive, non-breaking change. The in-memory
+  tree is `Sync`, so concurrent reads work today.
+
+## [0.6.0] - 2026-06-08
+
+Alpha. The API stays frozen; this release broadens coverage to a sustained,
+consumer-shaped workload and records the benchmark baselines.
+
+### Added
+
+- `tests/soak.rs`: a long, read-heavy mixed workload (point lookups, range scans,
+  inserts, deletes) over an evolving working set — 200,000 deterministic
+  operations checked against a `BTreeMap` reference per operation and in full at
+  checkpoints, then drained to an empty tree. The shape a storage engine drives a
+  secondary index with.
+- `docs/PERFORMANCE.md`: benchmark baselines for point lookups, inserts, removes,
+  range scans, and bulk load, with method and interpretation.
+
 ## [0.5.0] - 2026-06-08
 
 Hardening and the public API freeze. No new public surface — this release adds
@@ -117,7 +158,9 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` (Node 24 actions; fmt, clippy, test, doc, audit, deny) and `.github/FUNDING.yml`.
 
 <!-- LINKS -->
-[Unreleased]: https://github.com/jamesgober/index-db/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jamesgober/index-db/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/jamesgober/index-db/compare/v0.6.0...v1.0.0
+[0.6.0]: https://github.com/jamesgober/index-db/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jamesgober/index-db/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/index-db/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/index-db/compare/v0.2.0...v0.3.0

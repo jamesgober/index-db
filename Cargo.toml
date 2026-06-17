@@ -9,7 +9,7 @@
 #╚═══════════════════════════════╝
 [package]
 name    = "index-db"
-version = "0.5.0"
+version = "1.0.0"
 
 # Minimum Supported Rust Version (MSRV)
 rust-version = "1.85"
@@ -62,15 +62,15 @@ path = "src/lib.rs"
 # #################################
 [features]
 default = ["std"]
+# Use the standard library. With it disabled the crate is `no_std` (it always
+# relies on `alloc`).
 std = []
-# Serialization for public types.
-serde = ["dep:serde"]
 
 
 # DEPENDENCIES
 # #################################
+# None. index-db has no runtime dependencies.
 [dependencies]
-serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 
 
 # DEV DEPENDENCIES
