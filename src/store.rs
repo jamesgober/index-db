@@ -74,9 +74,15 @@ impl<K, V> NodeStore<K, V> for InMemoryStore<K, V> {
             self.slab[id.0 as usize] = node;
             id
         } else {
-            let id = NodeId(self.slab.len() as u32);
+            // Ids are `u32`, so a store holds at most 2^32 nodes: far more than
+            // fits in memory (each node holds up to `order - 1` entries). Should
+            // that ever be reached, fail loudly rather than alias an existing
+            // node.
+            let Ok(raw) = u32::try_from(self.slab.len()) else {
+                panic!("index-db: node id space exhausted (2^32 nodes)");
+            };
             self.slab.push(node);
-            id
+            NodeId(raw)
         }
     }
 

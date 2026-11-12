@@ -18,18 +18,18 @@
 
 <div align="left">
     <p>
-        <strong>index-db</strong> is a <b>B+tree indexing primitive</b> for storage engines: ordered keys mapped to values, with fast point lookups and <b>efficient range scans</b>, laid out over <b>paged storage</b> rather than the heap.
+        <strong>index-db</strong> is a <b>B+tree indexing primitive</b> for storage engines: an <b>in-memory ordered map</b> with fast point lookups, <b>efficient range scans</b> forward and in reverse, and bulk construction from sorted input.
     </p>
     <p>
-        Nodes are pages, so the tree persists and caches through a pager (it pairs with <code>page-db</code>), and it supports <b>concurrent access</b> via latch coupling (crabbing) so many readers and writers can traverse at once without locking the whole tree.
+        The tree lives on the heap and is not persisted. It is <code>Sync</code>, so any number of threads can read it at once; writes take <code>&amp;mut self</code>, so concurrent writers need a lock around the whole tree (for example <code>RwLock&lt;BPlusTree&lt;K, V&gt;&gt;</code>). Nodes are reached through an internal storage seam, the groundwork for a planned page-backed backend over <code>page-db</code> with persistence and latch-coupled concurrent writers; that backend is not part of 1.0.
     </p>
     <br>
     <hr>
     <p>
-        <strong>MSRV is 1.85+</strong> (Rust 2024 edition). Ordered B+tree. Range scans. Latch-coupled concurrent access.
+        <strong>MSRV is 1.85+</strong> (Rust 2024 edition). In-memory ordered B+tree. Range scans. Concurrent reads.
     </p>
     <blockquote>
-        <strong>Status: 1.0 &mdash; stable, API frozen until 2.0.</strong> <code>v1.0.0</code> is the stable in-memory ordered map &mdash; ordered storage, point lookups, deletion, forward and reverse range scans, and bulk construction from sorted input &mdash; hardened with adversarial, large-scale, and sustained soak tests. The tree is <code>Sync</code>, so any number of threads may read it at once. Node access runs through an internal storage seam so a page-backed, concurrent (write-side) backend over <code>page-db</code> arrives additively in a 1.x release without breaking this API. See <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: 1.0, stable, API frozen until 2.0.</strong> <code>v1.0</code> is the stable in-memory ordered map (ordered storage, point lookups, deletion, forward and reverse range scans, and bulk construction from sorted input), hardened with adversarial, large-scale, and sustained soak tests. The tree is <code>Sync</code>, so any number of threads may read it at once. Paging, persistence, and concurrent writers are planned, not shipped: a page-backed backend over <code>page-db</code> is on the roadmap and will be additive. See <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -38,18 +38,19 @@
 
 <h2>What it does</h2>
 
-**Available now (`v1.0.0`):**
+**Available now (`v1.0`):**
 
-- **Ordered B+tree** &mdash; keys kept in sorted order; logarithmic point lookup, insert, and delete
-- **Self-balancing** &mdash; nodes split on insert and borrow or merge on delete, so the tree stays balanced at every depth on its own
-- **Range scans** &mdash; forward and reverse iteration over a key range, the operation B+trees exist for
-- **Bulk load** &mdash; build a balanced tree bottom-up from sorted input in one fast pass
-- **Storage seam** &mdash; nodes are addressed by id through an internal node store, so the same algorithm can later run over a paged, persistent backend
-- **`no_std` support** &mdash; depends only on `alloc`; the `std` feature is optional
+- **Ordered B+tree**: keys kept in sorted order; logarithmic point lookup, insert, and delete
+- **Self-balancing**: nodes split on insert and borrow or merge on delete, so the tree stays balanced at every depth on its own
+- **Range scans**: forward and reverse iteration over a key range, the operation B+trees exist for
+- **Bulk load**: build a balanced tree bottom-up from sorted input in one fast pass
+- **Concurrent reads**: the tree is `Sync`, so any number of threads can read it at once; writers need `&mut` access
+- **Storage seam**: nodes are addressed by id through an internal node store, so the same algorithm can later run over a paged, persistent backend
+- **`no_std` support**: depends only on `alloc`; the `std` feature is optional
 
-**On the roadmap** (see [`dev/ROADMAP.md`](./dev/ROADMAP.md)):
+**On the roadmap, not in 1.0** (see [`dev/ROADMAP.md`](./dev/ROADMAP.md)):
 
-- **Page-backed, concurrent backend** &mdash; nodes as `page-db` pages, with latch coupling (crabbing) over the pager's frame guards for many-reader / many-writer traversal. Concurrency is a property of the storage backend, not of the in-memory tree.
+- **Page-backed, persistent, concurrent backend**: nodes as `page-db` pages, persisted and cached by the pager, with latch coupling (crabbing) over the pager's frame guards so many readers and writers can traverse at once. Until it ships, the tree is in memory only and is lost when the process exits.
 
 <br>
 <hr>
@@ -125,14 +126,13 @@ For the complete reference with examples for every method, see [`docs/API.md`](.
 
 ## Where It Fits
 
-`index-db` is the ordered-index layer. It builds on / pairs with:
+`index-db` is the ordered-index layer. Today it is an in-memory map; related crates:
 
-- [`page-db`](https://github.com/jamesgober/page-db) &mdash; B+tree nodes are pages allocated and cached by the pager
-- [`lock-db`](https://github.com/jamesgober/lock-db) &mdash; range locks protect scanned key ranges
-- storage engines &mdash; the secondary-index and ordered-access structure above the pager
-- [`lsm-db`](https://github.com/jamesgober/lsm-db) &mdash; a B-tree alternative to the LSM index for read-heavy workloads
+- [`page-db`](https://github.com/jamesgober/page-db): the paged storage substrate the planned page-backed backend will use (not a dependency of 1.0)
+- [`lock-db`](https://github.com/jamesgober/lock-db): range locks for protecting scanned key ranges in a storage engine
+- [`lsm-db`](https://github.com/jamesgober/lsm-db): an LSM storage engine, the write-optimized alternative to a B-tree index
 
-It has no first-party dependencies, so it builds and tests standalone today.
+It has no runtime dependencies, so it builds and tests standalone.
 
 <br>
 

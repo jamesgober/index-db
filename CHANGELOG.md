@@ -9,6 +9,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-11
+
+Documentation corrections and a panic-safety fix. No API change.
+
+### Fixed
+
+- The README, the crate docs and the crates.io description said the tree is
+  laid out over paged storage, persists through a pager, and supports
+  latch-coupled concurrent writers. 1.0 is an in-memory tree: it is not
+  persisted, it is `Sync` for concurrent reads, and writers need `&mut` access.
+  The docs now say so, and the page-backed, persistent, concurrent backend is
+  marked as planned.
+- A `K::clone` that panicked during `insert` or `remove` (while splitting a
+  leaf or borrowing from a sibling) could leave the tree inconsistent: an entry
+  that `iter` yielded but `get` missed, a wrong `len`, and a duplicate key on
+  re-insert. Separator keys are now cloned before any entry moves, and `len` is
+  updated when the entry leaves its leaf.
+- The allocation column in docs/API.md and the notes in docs/PERFORMANCE.md
+  were wrong for `new`, `insert` and `remove`; they now match what the code
+  does.
+- Node ids are checked when assigned instead of being cast, so the node store
+  fails loudly at its 2^32-node limit rather than aliasing a node.
+- `cargo test --no-default-features` compiles again; the in-crate tests need
+  `std` and are gated on it.
+
+### Changed
+
+- Documented that `range` with a start after its end yields nothing, that
+  `from_sorted` collects its input and falls back silently on unsorted input,
+  and that `clear` keeps the node storage's capacity.
+- Removed the unused `loom` dev-dependency.
+
 ## [1.0.0] - 2026-06-08
 
 First stable release: the in-memory ordered B+tree. The public API is frozen
@@ -158,7 +190,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` (Node 24 actions; fmt, clippy, test, doc, audit, deny) and `.github/FUNDING.yml`.
 
 <!-- LINKS -->
-[Unreleased]: https://github.com/jamesgober/index-db/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jamesgober/index-db/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/jamesgober/index-db/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jamesgober/index-db/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/jamesgober/index-db/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jamesgober/index-db/compare/v0.4.0...v0.5.0

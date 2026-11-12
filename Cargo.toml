@@ -9,7 +9,7 @@
 #╚═══════════════════════════════╝
 [package]
 name    = "index-db"
-version = "1.0.0"
+version = "1.0.1"
 
 # Minimum Supported Rust Version (MSRV)
 rust-version = "1.85"
@@ -22,7 +22,7 @@ license = "Apache-2.0 OR MIT"
 readme = "README.md"
 
 # Description
-description = "B+tree indexing primitive for Rust storage engines - ordered keys, range scans, and concurrent access over paged storage."
+description = "In-memory B+tree ordered map for Rust storage engines - ordered keys, point lookups, range scans, bulk load, and concurrent reads."
 
 # Keywords (5 max)
 keywords = [
@@ -78,9 +78,6 @@ std = []
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest  = "1"
-
-[target.'cfg(loom)'.dev-dependencies]
-loom = "0.7"
 
 
 # BENCHMARKS

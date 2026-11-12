@@ -47,8 +47,10 @@ that a page-backed backend will reuse.
 | `insert` (amortized, build from empty) | ~20 ns | ~44 ns |
 | `remove` (amortized, delete all) | ~38 ns | ~62 ns |
 
-Both are logarithmic per operation. Inserts allocate only when a node splits;
-removes never allocate, but rebalancing (borrow or merge) touches a sibling, so a
+Both are logarithmic per operation. Inserts allocate on node splits and when a
+node's arrays grow (about 0.09 allocations per insert over 100,000 random
+inserts); removes allocate rarely, when a merge grows the surviving node or the
+free-node list grows. Rebalancing (borrow or merge) touches a sibling, so a
 delete does a little more pointer-chasing than an insert at the same size.
 
 ## Range scans
