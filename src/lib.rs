@@ -1,8 +1,8 @@
 //! # index-db
 //!
-//! A B+tree indexing primitive for storage engines: ordered keys mapped to
-//! values, with fast point lookups, laid out as a tree of fixed-fan-out nodes
-//! rather than on the heap one entry at a time.
+//! A B+tree indexing primitive for storage engines: an in-memory ordered map
+//! with fast point lookups and range scans, laid out as a tree of
+//! fixed-fan-out nodes rather than one heap allocation per entry.
 //!
 //! The one public type is [`BPlusTree`], an ordered map. Keys are kept sorted
 //! across the tree, so a lookup is a binary search at each level and the height
@@ -37,10 +37,13 @@
 //! `v1.0.0` is the stable in-memory ordered map. The public API is frozen until
 //! 2.0: search, insert, delete (with merge and redistribute), forward and reverse
 //! range scans, and bulk construction from sorted input. The tree is [`Sync`], so
-//! any number of threads may read it at once. Node access runs through an
-//! internal storage seam so that a page-backed, concurrent (write-side) backend
-//! over `page-db` can be added in a 1.x release without changing the tree
-//! algorithm or breaking this API. See `dev/ROADMAP.md`.
+//! any number of threads may read it at once; writes take `&mut self`, so
+//! concurrent writers need a lock around the tree. The tree is not persisted.
+//!
+//! Paging, persistence, and latch-coupled concurrent writers are planned, not
+//! shipped: node access runs through an internal storage seam so that a
+//! page-backed backend over `page-db` can be added later without changing the
+//! tree algorithm or breaking this API. See `dev/ROADMAP.md`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

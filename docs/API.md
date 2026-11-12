@@ -1,9 +1,10 @@
 # index-db &mdash; API Reference
 
 > Complete reference for every public item in `index-db`, with examples.
-> **Status: 1.0 — stable, API frozen until 2.0.** The public surface below is
-> stable. The only change planned for the 1.x line is an additive, defaulted store
-> type parameter when the page-backed, concurrent backend lands. See
+> **Status: 1.0, stable, API frozen until 2.0.** The public surface below is
+> stable. It is an in-memory tree: nothing is persisted, and writers need
+> `&mut` access. A page-backed, persistent, concurrent backend is planned as an
+> additive 1.x change and is not part of 1.0. See
 > [`dev/ROADMAP.md`](../dev/ROADMAP.md).
 
 ## Table of Contents
@@ -48,9 +49,12 @@ one a pager will later back.
 As of `v1.0.0` the in-memory ordered-map surface is stable and frozen until 2.0:
 search, insert, delete (with merge and redistribute), ordered iteration, forward
 and reverse range scans, and bulk construction from sorted input. The tree is
-`Sync`, so any number of threads may read it concurrently. A page-backed,
-concurrent (write-side) backend arrives in a 1.x release; node access already
-runs through an internal storage seam so it is additive.
+`Sync`, so any number of threads may read it concurrently; `insert`, `remove`
+and `clear` take `&mut self`, so concurrent writers need a lock around the
+whole tree. Nothing is persisted. A page-backed backend with persistence and
+latch-coupled concurrent writers is planned, not shipped; node access already
+runs through an internal storage seam so it can be added without breaking this
+API.
 
 ---
 
@@ -108,8 +112,9 @@ pub fn new() -> BPlusTree<K, V>
 Create an empty tree with the default node fan-out.
 
 No parameters. The fan-out (the maximum number of children per node) is fixed
-internally at a cache-conscious default; a fresh tree is a single empty leaf, so
-it allocates nothing for its nodes until the first insert.
+internally at a cache-conscious default; a fresh tree is a single empty leaf.
+Creating it performs one small allocation (the node store's first slot); the
+leaf's key and value arrays stay unallocated until the first insert.
 
 **Returns:** an empty `BPlusTree<K, V>`.
 
@@ -149,7 +154,9 @@ Build a tree in bulk from entries already sorted by key.
   ascending and unique, the tree is built bottom-up in a single fast pass, packed
   densely. Otherwise it falls back to inserting one entry at a time, so the result
   is always a correct tree; on that path a later duplicate key overwrites an
-  earlier one.
+  earlier one. The input is collected into a `Vec` first so its order can be
+  checked, which holds one extra copy of the entries during the build, and
+  unsorted input is not reported: it only takes the slower `O(n log n)` path.
 
 **Returns:** the populated tree.
 
@@ -436,6 +443,10 @@ Iterate over the entries whose keys fall in `range`, in ascending key order.
 [`iter`](#bplustreeiter) it is double-ended, so a range can be scanned forward or
 in reverse.
 
+A range whose start lies after its end, such as `50..10`, or an empty one such
+as `(Excluded(5), Excluded(5))`, yields nothing. Unlike `BTreeMap::range`, it
+does not panic.
+
 ```rust
 use index_db::BPlusTree;
 
@@ -564,7 +575,8 @@ pub fn clear(&mut self)
 ```
 
 Remove every entry, returning the tree to its empty state. The tree is reusable
-afterward.
+afterward. The node storage keeps its capacity for reuse, so the memory a large
+tree held is returned only when the tree is dropped.
 
 No parameters. No return value.
 
@@ -689,12 +701,12 @@ For a tree of `n` entries with node fan-out `b`:
 | Operation | Time | Allocations |
 |-----------|------|-------------|
 | `get` / `contains_key` | `O(log n)` | none |
-| `insert` | `O(log n)` | amortized; only on a node split |
-| `remove` | `O(log n)` | none |
+| `insert` | `O(log n)` | amortized; on node splits and when a node's arrays grow |
+| `remove` | `O(log n)` | occasional; when a merge grows the surviving node or the free-node list grows |
 | `from_sorted` (sorted input) | `O(n)` | one pass, no per-entry splitting |
 | `iter` / `range` | `O(log n)` to start, then `O(1)` per entry | one path stack per cursor |
 | `len` / `is_empty` / `height` | `O(1)` / `O(1)` / `O(log n)` | none |
-| `clear` | `O(n)` (drops entries) | none |
+| `clear` | `O(n)` (drops entries) | none; the node storage keeps its capacity |
 
 A lookup performs one binary search per level — at most `log_b(n)` levels, each a
 search over up to `b - 1` keys. Lookups touch only keys, never values, and

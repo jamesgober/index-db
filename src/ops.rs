@@ -110,17 +110,26 @@ fn insert_leaf<K: Ord + Clone, V, S: Store<K, V>>(
         match leaf.keys.binary_search(&key) {
             Ok(i) => Step::Replaced(core::mem::replace(&mut leaf.vals[i], value)),
             Err(i) => {
-                leaf.keys.insert(i, key);
-                leaf.vals.insert(i, value);
-                if leaf.keys.len() < order {
+                let len = leaf.keys.len() + 1;
+                if len < order {
+                    leaf.keys.insert(i, key);
+                    leaf.vals.insert(i, value);
                     Step::Done
                 } else {
                     // Copy the right half's first key up as the separator: the
                     // entry it names stays in the leaf where lookups find it.
-                    let mid = leaf.keys.len() / 2;
+                    // The separator is cloned before anything moves, so a
+                    // panicking `K::clone` leaves the leaf untouched.
+                    let mid = len / 2;
+                    let sep = match i.cmp(&mid) {
+                        core::cmp::Ordering::Less => leaf.keys[mid - 1].clone(),
+                        core::cmp::Ordering::Equal => key.clone(),
+                        core::cmp::Ordering::Greater => leaf.keys[mid].clone(),
+                    };
+                    leaf.keys.insert(i, key);
+                    leaf.vals.insert(i, value);
                     let keys = leaf.keys.split_off(mid);
                     let vals = leaf.vals.split_off(mid);
-                    let sep = keys[0].clone();
                     Step::Split { keys, vals, sep }
                 }
             }
@@ -197,13 +206,17 @@ fn absorb_split<K: Ord + Clone, V, S: Store<K, V>>(
 
 /// Remove `key`, returning its value (if present) and the tree's root, which
 /// changes only when the tree collapses a level.
+///
+/// `len` is decremented the moment the entry leaves its leaf, so it stays
+/// accurate even if a later step (a `K::clone` during rebalancing) panics.
 pub(crate) fn remove<K: Ord + Clone, V, S: Store<K, V>>(
     store: &mut S,
     root: NodeId,
     key: &K,
     min_keys: usize,
+    len: &mut usize,
 ) -> (Option<V>, NodeId) {
-    let removed = remove_from(store, root, key, min_keys);
+    let removed = remove_from(store, root, key, min_keys, len);
     let new_root = if removed.is_some() {
         collapse_root(store, root)
     } else {
@@ -219,6 +232,7 @@ fn remove_from<K: Ord + Clone, V, S: Store<K, V>>(
     id: NodeId,
     key: &K,
     min_keys: usize,
+    len: &mut usize,
 ) -> Option<V> {
     let descend = match store.get(id) {
         Node::Internal(internal) => {
@@ -229,14 +243,18 @@ fn remove_from<K: Ord + Clone, V, S: Store<K, V>>(
     };
     match descend {
         None => {
-            if let Node::Leaf(leaf) = store.get_mut(id) {
+            let removed = if let Node::Leaf(leaf) = store.get_mut(id) {
                 leaf.remove(key)
             } else {
                 None
+            };
+            if removed.is_some() {
+                *len = len.saturating_sub(1);
             }
+            removed
         }
         Some((child, idx)) => {
-            let removed = remove_from(store, child, key, min_keys);
+            let removed = remove_from(store, child, key, min_keys, len);
             if removed.is_some() && store.get(child).keys_len() < min_keys {
                 rebalance(store, id, idx, min_keys);
             }
@@ -318,20 +336,25 @@ fn borrow_from_left<K: Ord + Clone, V, S: Store<K, V>>(
 ) {
     if store.get(child).as_leaf().is_some() {
         let moved = if let Node::Leaf(node) = store.get_mut(left) {
-            match (node.keys.pop(), node.vals.pop()) {
-                (Some(k), Some(v)) => Some((k, v)),
-                _ => None,
+            // Clone the new separator before anything moves, so a panicking
+            // `K::clone` leaves both leaves and the parent as they were.
+            match node.keys.last().cloned() {
+                Some(sep) => match (node.keys.pop(), node.vals.pop()) {
+                    (Some(k), Some(v)) => Some((k, v, sep)),
+                    _ => None,
+                },
+                None => None,
             }
         } else {
             None
         };
-        if let Some((k, v)) = moved {
+        if let Some((k, v, sep)) = moved {
             if let Node::Leaf(node) = store.get_mut(child) {
-                node.keys.insert(0, k.clone());
+                node.keys.insert(0, k);
                 node.vals.insert(0, v);
             }
             if let Node::Internal(node) = store.get_mut(parent) {
-                node.keys[idx - 1] = k;
+                node.keys[idx - 1] = sep;
             }
         }
     } else {
@@ -372,20 +395,21 @@ fn borrow_from_right<K: Ord + Clone, V, S: Store<K, V>>(
             if node.keys.is_empty() {
                 None
             } else {
-                Some((node.keys.remove(0), node.vals.remove(0)))
+                // The sibling's second key becomes the new separator. Clone it
+                // before anything moves, so a panicking `K::clone` leaves both
+                // leaves and the parent as they were. The sibling holds more
+                // than the minimum, so the key exists.
+                let new_sep = node.keys.get(1).cloned();
+                Some((node.keys.remove(0), node.vals.remove(0), new_sep))
             }
         } else {
             None
         };
-        if let Some((k, v)) = moved {
+        if let Some((k, v, new_sep)) = moved {
             if let Node::Leaf(node) = store.get_mut(child) {
                 node.keys.push(k);
                 node.vals.push(v);
             }
-            let new_sep = match store.get(right) {
-                Node::Leaf(node) => node.keys.first().cloned(),
-                Node::Internal(_) => None,
-            };
             if let Some(ns) = new_sep {
                 if let Node::Internal(node) = store.get_mut(parent) {
                     node.keys[idx] = ns;

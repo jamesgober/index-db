@@ -106,6 +106,11 @@ impl<K: Ord + Clone, V> BPlusTree<K, V> {
     /// requires sorted, unique keys. On the fallback path a later duplicate key
     /// overwrites an earlier one.
     ///
+    /// The input is first collected into a `Vec` so its order can be checked,
+    /// which holds one extra copy of the entries for the duration of the build.
+    /// Unsorted input is not reported; it only takes the slower `O(n log n)`
+    /// path.
+    ///
     /// # Examples
     ///
     /// ```
@@ -219,6 +224,9 @@ impl<K, V> BPlusTree<K, V> {
 
     /// Remove every entry, returning the tree to its empty state.
     ///
+    /// The node storage keeps its capacity for reuse, so memory held by a large
+    /// tree is not returned until the tree is dropped.
+    ///
     /// # Examples
     ///
     /// ```
@@ -308,6 +316,10 @@ impl<K: Ord, V> BPlusTree<K, V> {
     /// result is double-ended, so a range can be walked forward or in reverse
     /// with [`rev`](Iterator::rev).
     ///
+    /// A range whose start lies after its end, such as `50..10`, or an empty
+    /// one such as `(Excluded(5), Excluded(5))`, yields nothing. It does not
+    /// panic, unlike [`BTreeMap::range`](alloc::collections::BTreeMap::range).
+    ///
     /// # Examples
     ///
     /// ```
@@ -388,11 +400,8 @@ impl<K: Ord + Clone, V> BPlusTree<K, V> {
     /// ```
     pub fn remove(&mut self, key: &K) -> Option<V> {
         let min_keys = self.min_keys();
-        let (removed, root) = ops::remove(&mut self.store, self.root, key, min_keys);
+        let (removed, root) = ops::remove(&mut self.store, self.root, key, min_keys, &mut self.len);
         self.root = root;
-        if removed.is_some() {
-            self.len -= 1;
-        }
         removed
     }
 
@@ -419,7 +428,7 @@ impl<'a, K, V> IntoIterator for &'a BPlusTree<K, V> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[allow(clippy::unwrap_used, clippy::expect_used, reason = "test assertions")]
 mod tests {
     use alloc::vec::Vec;
